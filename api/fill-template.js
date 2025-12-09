@@ -34,6 +34,9 @@ const cleanBullet = (s) =>
     .replace(/^\s*[-–—•·]\s*/u, "")
     .trim();
 
+/* brand colour for CTRL magenta (#A64E8C) */
+const BRAND = { r: 166 / 255, g: 78 / 255, b: 140 / 255 };
+
 /* safe JSON parse (kept if needed later) */
 function safeJsonParse(str, fb = {}) {
   try {
@@ -143,35 +146,27 @@ const rectTLtoBL = (page, box, inset = 0) => {
   return { x, y, w, h };
 };
 
+/* rounded rectangle highlight (not used for cards now, but kept if needed) */
 function paintStateHighlight(page3, dom, cfg = {}) {
   if (!page3) return null;
   const b = (cfg.absBoxes && cfg.absBoxes[dom]) || null;
   if (!b) return null;
 
   const pageH = page3.getHeight();
-  const inset = N(
+  const inset =
     (cfg.styleByState && cfg.styleByState[dom]?.inset) ??
-      cfg.highlightInset ??
-      4,
-    4
-  );
-  const radius = N(
-    (cfg.styleByState && cfg.styleByState[dom]?.radius) ??
-      cfg.highlightRadius ??
-      20,
-    20
-  );
-
+    cfg.highlightInset ??
+    4;
   const x = N(b.x) + inset;
   const yTop = N(b.y) + inset;
   const w = Math.max(0, N(b.w) - inset * 2);
   const h = Math.max(0, N(b.h) - inset * 2);
   const y = pageH - yTop - h;
 
-  const fillOpacity = clamp(N(cfg.fillOpacity, 0.4), 0, 1);
+  const fillOpacity = clamp(N(cfg.fillOpacity, 0.25), 0, 1);
   const strokeOpacity = clamp(N(cfg.strokeOpacity, 0.9), 0, 1);
-  const fillColor = cfg.fillColor || { r: 0.4, g: 0.6, b: 0.9 };
-  const strokeColor = cfg.strokeColor || { r: 0.0, g: 0.2, b: 0.6 };
+  const fillColor = cfg.fillColor || BRAND;
+  const strokeColor = cfg.strokeColor || BRAND;
 
   page3.drawRectangle({
     x,
@@ -185,10 +180,44 @@ function paintStateHighlight(page3, dom, cfg = {}) {
     borderOpacity: strokeOpacity,
   });
 
-  // anchor for label (YOU ARE HERE / crown)
   const labelX = x + w / 2 + (cfg.labelOffsetX || 0);
   const labelY = y + h + (cfg.labelOffsetY || 12);
   return { labelX, labelY };
+}
+
+/* L-shaped magenta “shadow” under a card */
+function drawShadowL(page, absBox, strength = 1) {
+  if (!page || !absBox) return;
+
+  const pageH = page.getHeight();
+  const x = N(absBox.x);
+  const yTop = N(absBox.y);
+  const w = N(absBox.w);
+  const h = N(absBox.h);
+
+  const yBottom = pageH - (yTop + h);
+
+  // tweak these if you want thicker/thinner shadows
+  const sideWidth = 18 * strength;
+  const baseHeight = 18 * strength;
+
+  // bottom bar
+  page.drawRectangle({
+    x,
+    y: yBottom,
+    width: w,
+    height: baseHeight,
+    color: rgb(BRAND.r, BRAND.g, BRAND.b),
+  });
+
+  // right-hand bar
+  page.drawRectangle({
+    x: x + w - sideWidth,
+    y: yBottom,
+    width: sideWidth,
+    height: h,
+    color: rgb(BRAND.r, BRAND.g, BRAND.b),
+  });
 }
 
 function resolveDomKey(dom, domChar, domDesc) {
@@ -211,10 +240,10 @@ function parseDataParam(raw) {
   try {
     decoded = decodeURIComponent(enc);
   } catch {
-    // if it was not actually URI-encoded, ignore
+    // ignore if not URI-encoded
   }
 
-  // Step 2: first attempt: assume base64-encoded JSON (old behaviour)
+  // Step 2: try base64-encoded JSON (old behaviour)
   let b64 = decoded.replace(/-/g, "+").replace(/_/g, "/");
   while (b64.length % 4) b64 += "=";
 
@@ -222,7 +251,7 @@ function parseDataParam(raw) {
     const txt = Buffer.from(b64, "base64").toString("utf8");
     return JSON.parse(txt);
   } catch {
-    // Step 3: fallback: assume decoded is plain JSON
+    // Step 3: assume plain JSON
     try {
       return JSON.parse(decoded);
     } catch {
@@ -230,7 +259,6 @@ function parseDataParam(raw) {
     }
   }
 }
-
 
 /* GET/POST payload reader */
 async function readPayload(req) {
@@ -241,15 +269,6 @@ async function readPayload(req) {
 }
 
 /* ───────────── normalise new CTRL PoC payload ───────────── */
-/**
- * Accepts:
- *  - new canonical payload from Botpress:
- *      { identity, ctrl, text, workWith, actions, chart }
- *  - older PoC payloads with p3:/p4:/p5: keys
- * and returns P with:
- *  - generic fields (name, dateLbl, dom, domState, chartUrl, raw, ctrlMeta)
- *  - page-aligned fields P["p3:exec"], P["p5:freq"], etc.
- */
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const ctrl = d.ctrl || {};
@@ -258,7 +277,6 @@ function normaliseInput(d = {}) {
   const actionsObj = d.actions || {};
   const chart = d.chart || {};
 
-  // Canonical name + date
   const nameCand =
     (d.person && d.person.fullName) ||
     identity.fullName ||
@@ -278,43 +296,18 @@ function normaliseInput(d = {}) {
     d["p1:d"] ||
     "";
 
-  // Dominant + second state, counts/order
   const domState =
-    ctrl.dominantState ||
-    d.domState ||
-    d.dom ||
-    d["p3:dom"] ||
-    "";
+    ctrl.dominantState || d.domState || d.dom || d["p3:dom"] || "";
   const dom2State =
-    ctrl.secondState ||
-    d.dom2 ||
-    d["p3:dom2"] ||
-    "";
+    ctrl.secondState || d.dom2 || d["p3:dom2"] || "";
 
-  const counts =
-    ctrl.counts ||
-    d.counts ||
-    d["p3:counts"] ||
-    {};
-  const order =
-    ctrl.order ||
-    d.order ||
-    d["p3:order"] ||
-    "";
+  const counts = ctrl.counts || d.counts || d["p3:counts"] || {};
+  const order = ctrl.order || d.order || d["p3:order"] || "";
 
-  // TLDR lines – split into up to 5 bullets for p3:tldr1..5
-  const tldrRaw =
-    text.tldr ||
-    d["p3:tldr"] ||
-    "";
+  const tldrRaw = text.tldr || d["p3:tldr"] || "";
   const tldrLines = splitToList(tldrRaw).map(cleanBullet).slice(0, 5);
 
-  // Actions list from canonical object if present
-  const actsIn =
-    actionsObj.list ||
-    d.actions ||
-    d.actionsText ||
-    [];
+  const actsIn = actionsObj.list || d.actions || d.actionsText || [];
   const actsList = Array.isArray(actsIn)
     ? actsIn.map((a) => cleanBullet(a.text || a))
     : splitToList(actsIn).map(cleanBullet);
@@ -333,12 +326,11 @@ function normaliseInput(d = {}) {
     domState,
     counts,
     order,
-    tips: [], // tips not used in PoC profile for now
+    tips: [],
     actions: actsList,
     chartUrl: chart.spiderUrl || d.chartUrl || d["p5:chart"] || "",
     layout: d.layout || null,
 
-    // PoC page-aligned fields (fallback to older keys if canonical missing)
     "p1:n": d["p1:n"] || nameCand || "",
     "p1:d": d["p1:d"] || dateLbl || "",
 
@@ -351,41 +343,33 @@ function normaliseInput(d = {}) {
     "p3:tldr5": d["p3:tldr5"] || tldrLines[4] || "",
     "p3:tip": d["p3:tip"] || text.tipAction || "",
 
-    "p4:stateDeep":
-      d["p4:stateDeep"] || text.stateSubInterpretation || "",
+    "p4:stateDeep": d["p4:stateDeep"] || text.stateSubInterpretation || "",
 
     "p5:freq": d["p5:freq"] || text.frequency || "",
     "p5:chart":
-      d["p5:chart"] ||
-      chart.spiderUrl ||
-      d.chartUrl ||
-      "",
+      d["p5:chart"] || chart.spiderUrl || d.chartUrl || "",
 
     "p6:seq": d["p6:seq"] || text.sequence || "",
 
     "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
     "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
 
-    "p8:collabC":
-      d["p8:collabC"] || workWith.concealed || "",
-    "p8:collabT":
-      d["p8:collabT"] || workWith.triggered || "",
-    "p8:collabR":
-      d["p8:collabR"] || workWith.regulated || "",
-    "p8:collabL":
-      d["p8:collabL"] || workWith.lead || "",
+    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
+    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
+    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
+    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
 
     "p9:action1": act1,
     "p9:action2": act2,
-    "p9:closing":
-      d["p9:closing"] || actionsObj.closingNote || "",
+    "p9:closing": d["p9:closing"] || actionsObj.closingNote || "",
   };
 
   return out;
 }
 
 async function loadTemplateBytesLocal(fname) {
-  if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
+  if (!fname.endsWith(".pdf"))
+    throw new Error(`Invalid template filename: ${fname}`);
 
   const __file = fileURLToPath(import.meta.url);
   const __dir = path.dirname(__file);
@@ -411,6 +395,32 @@ async function loadTemplateBytesLocal(fname) {
   );
 }
 
+/* generic asset loader (for crown.png etc.) */
+async function loadAssetBytes(fname) {
+  const __file = fileURLToPath(import.meta.url);
+  const __dir = path.dirname(__file);
+
+  const candidates = [
+    path.join(__dir, "..", "..", "public", fname),
+    path.join(__dir, "..", "public", fname),
+    path.join(__dir, "public", fname),
+    path.join(process.cwd(), "public", fname),
+    path.join(__dir, fname),
+  ];
+
+  let lastErr;
+  for (const pth of candidates) {
+    try {
+      return await fs.readFile(pth);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw new Error(
+    `Asset not found in any known path for /public: ${fname} (${lastErr?.message || "no detail"})`
+  );
+}
+
 /* safe page accessors */
 const pageOrNull = (pages, idx0) => pages[idx0] ?? null;
 
@@ -418,10 +428,8 @@ const pageOrNull = (pages, idx0) => pages[idx0] ?? null;
 export default async function handler(req, res) {
   try {
     const q = req.method === "POST" ? (req.body || {}) : (req.query || {});
-    // Default to PoC template; still allow ?tpl= override from your URL
     const defaultTpl = "CTRL_PoC_Assessment_Profile_template.pdf";
     const tpl = S(q.tpl || defaultTpl).replace(/[^A-Za-z0-9._-]/g, "");
-
 
     const src = await readPayload(req);
     const P = normaliseInput(src);
@@ -429,6 +437,18 @@ export default async function handler(req, res) {
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    // crown image (optional)
+    let crownImg = null;
+    try {
+      const crownBytes = await loadAssetBytes("crown.png");
+      crownImg = await pdfDoc.embedPng(crownBytes);
+    } catch (e) {
+      console.warn(
+        "Crown image not found or failed to embed:",
+        e?.message || String(e)
+      );
+    }
 
     const pages = pdfDoc.getPages();
     const p1 = pageOrNull(pages, 0);
@@ -451,8 +471,22 @@ export default async function handler(req, res) {
         date: { x: 210, y: 600, w: 500, size: 25, align: "left" },
       },
       p3: {
-        domChar: { x: 272, y: 640, w: 630, size: 23, align: "left", maxLines: 6 },
-        domDesc: { x: 25, y: 685, w: 550, size: 18, align: "left", maxLines: 12 },
+        domChar: {
+          x: 272,
+          y: 640,
+          w: 630,
+          size: 23,
+          align: "left",
+          maxLines: 6,
+        },
+        domDesc: {
+          x: 25,
+          y: 685,
+          w: 550,
+          size: 18,
+          align: "left",
+          maxLines: 12,
+        },
         state: {
           useAbsolute: true,
           shape: "round",
@@ -465,37 +499,48 @@ export default async function handler(req, res) {
             R: { radius: 28, inset: 6 },
             L: { radius: 28, inset: 6 },
           },
-          labelByState: {
-            C: { x: 60, y: 245 },
-            T: { x: 290, y: 244 },
-            R: { x: 60, y: 605 },
-            L: { x: 290, y: 605 },
-          },
-          labelText: "YOU ARE HERE",
-          labelSize: 10,
-          labelColor: { r: 0, g: 0, b: 0 },
-          labelOffsetX: 0,
-          labelOffsetY: 0,
-          labelPadTop: 12,
-          labelPadBottom: 12,
           absBoxes: {
             C: { x: 58, y: 258, w: 188, h: 156 },
             T: { x: 299, y: 258, w: 196, h: 156 },
             R: { x: 60, y: 433, w: 188, h: 158 },
             L: { x: 298, y: 430, w: 195, h: 173 },
           },
+          crownWidth: 40,
+          crownHeight: 20,
+          crownOffsetY: 4,
         },
       },
       p4: {
-        spider: { x: 30, y: 585, w: 550, size: 16, align: "left", maxLines: 15 },
+        spider: {
+          x: 30,
+          y: 585,
+          w: 550,
+          size: 16,
+          align: "left",
+          maxLines: 15,
+        },
         chart: { x: 35, y: 235, w: 540, h: 260 },
       },
       p5: {
-        seqpat: { x: 25, y: 250, w: 550, size: 18, align: "left", maxLines: 12 },
+        seqpat: {
+          x: 25,
+          y: 250,
+          w: 550,
+          size: 18,
+          align: "left",
+          maxLines: 12,
+        },
       },
       p6: {
         theme: null,
-        themeExpl: { x: 25, y: 560, w: 550, size: 18, align: "left", maxLines: 12 },
+        themeExpl: {
+          x: 25,
+          y: 560,
+          w: 550,
+          size: 18,
+          align: "left",
+          maxLines: 12,
+        },
       },
       p7: {
         colBoxes: [
@@ -539,10 +584,42 @@ export default async function handler(req, res) {
         lineGap: 6,
         itemGap: 6,
         bulletIndent: 18,
-        tips1: { x: 30, y: 175, w: 530, h: 80, size: 18, align: "left", maxLines: 4 },
-        tips2: { x: 30, y: 265, w: 530, h: 80, size: 18, align: "left", maxLines: 4 },
-        acts1: { x: 30, y: 405, w: 530, h: 80, size: 18, align: "left", maxLines: 4 },
-        acts2: { x: 30, y: 495, w: 530, h: 80, size: 18, align: "left", maxLines: 4 },
+        tips1: {
+          x: 30,
+          y: 175,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        tips2: {
+          x: 30,
+          y: 265,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        acts1: {
+          x: 30,
+          y: 405,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        acts2: {
+          x: 30,
+          y: 495,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
       },
     };
 
@@ -550,7 +627,7 @@ export default async function handler(req, res) {
     if (p1 && P.name) drawTextBox(p1, font, P.name, L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
-    /* p3 — dominant + 2nd state visual + Exec / TLDR / tip */
+    /* p3 — dominant / second state shadows + Exec / TLDR / tip */
     (function drawPage3() {
       if (!p3 || !L.p3) return;
 
@@ -558,7 +635,7 @@ export default async function handler(req, res) {
       const raw = P.raw || {};
       const ctrl = raw.ctrl || {};
 
-      // 1) Find dominant + second states
+      // 1) dominant + second state
       const domKey = resolveDomKey(
         P["p3:dom"] || P.dom || ctrl.dominantState,
         P.domChar,
@@ -573,64 +650,49 @@ export default async function handler(req, res) {
       }
 
       if (!["C", "T", "R", "L"].includes(secondKey)) {
-        // derive from counts if available
         const counts = P.counts || ctrl.counts || {};
         const keys = ["C", "T", "R", "L"];
         const ranked = keys
-          .map(k => ({ k, n: Number(counts[k] || 0) || 0 }))
+          .map((k) => ({ k, n: Number(counts[k] || 0) || 0 }))
           .sort((a, b) => b.n - a.n);
-        const bestNonDom = ranked.find(r => r.k !== domKey && r.n > 0);
+        const bestNonDom = ranked.find((r) => r.k !== domKey && r.n > 0);
         if (bestNonDom) secondKey = bestNonDom.k;
       }
 
-      // 2) Draw subtle raise for 2nd strongest state (no label, lighter fill)
-      if (
-        secondKey &&
-        secondKey !== domKey &&
-        stateCfg.useAbsolute &&
-        stateCfg.absBoxes
-      ) {
-        const cfgSecond = {
-          ...stateCfg,
-          fillOpacity: 0.20,
-          strokeOpacity: 0.60
-        };
-        paintStateHighlight(p3, secondKey, cfgSecond);
+      const absBoxes = stateCfg.absBoxes || {};
+
+      // 2) 2nd place shadow (lighter / smaller)
+      if (secondKey && secondKey !== domKey && absBoxes[secondKey]) {
+        drawShadowL(p3, absBoxes[secondKey], 0.7);
       }
 
-      // 3) Draw strong highlight for dominant state
-      let crownAnchor = null;
-      if (domKey && stateCfg.useAbsolute) {
-        const cfgDom = {
-          ...stateCfg,
-          fillOpacity: 0.45,
-          strokeOpacity: 0.90
-        };
-        crownAnchor = paintStateHighlight(p3, domKey, cfgDom);
+      // 3) dominant state shadow (full)
+      if (domKey && absBoxes[domKey]) {
+        drawShadowL(p3, absBoxes[domKey], 1.0);
       }
 
-      // 4) Crown bar above dominant state (no text, no emoji)
-      if (crownAnchor) {
-        const cw = stateCfg.crownWidth  || 60;
-        const ch = stateCfg.crownHeight || 12;
-        const offsetY = stateCfg.crownOffsetY || 4;
+      // 4) crown image above dominant state
+      if (crownImg && domKey && absBoxes[domKey]) {
+        const b = absBoxes[domKey];
+        const pageH = p3.getHeight();
+        const crownW = stateCfg.crownWidth || 40;
+        const crownH = stateCfg.crownHeight || 20;
+        const gap = stateCfg.crownOffsetY || 4;
 
-        const x = crownAnchor.labelX - cw / 2;
-        const y = crownAnchor.labelY + offsetY;
+        const x = b.x + b.w / 2 - crownW / 2;
+        const yTopTL = b.y;
+        const yTopBL = pageH - yTopTL;
+        const y = yTopBL + gap;
 
-        p3.drawRectangle({
+        p3.drawImage(crownImg, {
           x,
           y,
-          width: cw,
-          height: ch,
-          color: rgb(0.95, 0.85, 0.40),
-          borderColor: rgb(0.80, 0.70, 0.25),
-          borderWidth: 1
+          width: crownW,
+          height: crownH,
         });
       }
 
-
-      // 4) Exec summary + TLDR + tip
+      // 5) Exec summary + TLDR + tip
       const exec = norm(P["p3:exec"]);
       const tldrs = [
         norm(P["p3:tldr1"]),
@@ -656,25 +718,17 @@ export default async function handler(req, res) {
 
     /* p4 — state / sub-state deep dive */
     if (p4 && L.p4?.spider && P["p4:stateDeep"]) {
-      drawTextBox(
-        p4,
-        font,
-        norm(P["p4:stateDeep"]),
-        L.p4.spider,
-        { maxLines: L.p4.spider.maxLines }
-      );
+      drawTextBox(p4, font, norm(P["p4:stateDeep"]), L.p4.spider, {
+        maxLines: L.p4.spider.maxLines,
+      });
     }
 
     /* p5 — frequency narrative + spider chart */
     if (p5) {
       if (L.p5?.seqpat && P["p5:freq"]) {
-        drawTextBox(
-          p5,
-          font,
-          norm(P["p5:freq"]),
-          L.p5.seqpat,
-          { maxLines: L.p5.seqpat.maxLines }
-        );
+        drawTextBox(p5, font, norm(P["p5:freq"]), L.p5.seqpat, {
+          maxLines: L.p5.seqpat.maxLines,
+        });
       }
 
       let chartUrl = norm(P["p5:chart"] || P.spiderChartUrl || P.chartUrl);
@@ -695,13 +749,9 @@ export default async function handler(req, res) {
 
     /* p6 — sequence narrative */
     if (p6 && L.p6?.themeExpl && P["p6:seq"]) {
-      drawTextBox(
-        p6,
-        font,
-        norm(P["p6:seq"]),
-        L.p6.themeExpl,
-        { maxLines: L.p6.themeExpl.maxLines }
-      );
+      drawTextBox(p6, font, norm(P["p6:seq"]), L.p6.themeExpl, {
+        maxLines: L.p6.themeExpl.maxLines,
+      });
     }
 
     /* p7 — themes (top + low) */
@@ -710,7 +760,7 @@ export default async function handler(req, res) {
       const low = norm(P["p7:themesLow"]);
 
       if (top) {
-        const box = L.p7.colBoxes[0]; // left
+        const box = L.p7.colBoxes[0];
         drawTextBox(
           p7,
           font,
@@ -721,7 +771,7 @@ export default async function handler(req, res) {
       }
 
       if (low) {
-        const box = L.p7.colBoxes[1]; // right
+        const box = L.p7.colBoxes[1];
         drawTextBox(
           p7,
           font,
@@ -778,7 +828,9 @@ export default async function handler(req, res) {
       const drawBullet = (page, spec, text) => {
         if (!page || !spec || !text) return;
         const bullet = `• ${text}`;
-        drawTextBox(page, font, bullet, spec, { maxLines: spec.maxLines || 4 });
+        drawTextBox(page, font, bullet, spec, {
+          maxLines: spec.maxLines || 4,
+        });
       };
 
       const tipsSlots = [L.p11.tips1, L.p11.tips2];
@@ -806,12 +858,11 @@ export default async function handler(req, res) {
     // output
     const bytes = await pdfDoc.save();
 
-    // --- Build dynamic filename: PoC_Profile_FullName_Date.pdf ---
     const safe = (value, fallback = "") =>
       String(value || fallback)
         .trim()
-        .replace(/[^A-Za-z0-9]+/g, "_")   // non-alphanumerics → _
-        .replace(/^_+|_+$/g, "");         // trim leading/trailing _
+        .replace(/[^A-Za-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
 
     const namePart = safe(P.name || P.fullName || "Profile");
     const datePart = safe(P.dateLbl || P.dateLabel || P.date || "");
@@ -827,7 +878,9 @@ export default async function handler(req, res) {
     console.error("PDF handler error:", err);
     res
       .status(500)
-      .json({ error: "Failed to generate PDF", detail: err?.message || String(err) });
+      .json({
+        error: "Failed to generate PDF",
+        detail: err?.message || String(err),
+      });
   }
-
 }
