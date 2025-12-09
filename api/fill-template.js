@@ -1,7 +1,6 @@
 /**
- * CTRL Coach Export Service · fill-template (Coach flow)
- * Place at: /pages/api/fill-template.js  (ctrl-coach-pdf-service)
- * TL-origin coordinates (pt), pages are 1-based.
+ * CTRL PoC Export Service · fill-template (Starter/PoC flow)
+ * Place at: /api/fill-template.js  (ctrl-poc-service)
  */
 export const config = { runtime: "nodejs" };
 
@@ -35,7 +34,7 @@ const cleanBullet = (s) =>
     .replace(/^\s*[-–—•·]\s*/u, "")
     .trim();
 
-/* safe JSON parse */
+/* safe JSON parse (kept if needed later) */
 function safeJsonParse(str, fb = {}) {
   try {
     return JSON.parse(str);
@@ -78,10 +77,10 @@ function drawTextBox(page, font, text, box, opts = {}) {
   if (!raw) return;
 
   const {
-    size = 12,
-    align = "left",
-    maxLines = 99,
-    lineGap = 4,
+    size = box.size || 12,
+    align = box.align || "left",
+    maxLines = opts.maxLines ?? box.maxLines ?? 99,
+    lineGap = box.lineGap ?? 4,
     color = rgb(0, 0, 0),
   } = box;
 
@@ -97,9 +96,8 @@ function drawTextBox(page, font, text, box, opts = {}) {
   const lines = [];
   let current = "";
 
-  const maxWidth = w;
   const fontSize = size;
-  const spaceWidth = font.widthOfTextAtSize(" ", fontSize);
+  const maxWidth = w;
 
   for (const word of words) {
     const testLine = current ? current + " " + word : word;
@@ -135,7 +133,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
   });
 }
 
-/* convert TL coords to BL rect */
+/* convert TL coords to BL rect (kept for future use) */
 const rectTLtoBL = (page, box, inset = 0) => {
   const pageH = page.getHeight();
   const x = N(box.x) + inset;
@@ -151,8 +149,18 @@ function paintStateHighlight(page3, dom, cfg = {}) {
   if (!b) return null;
 
   const pageH = page3.getHeight();
-  const inset = N((cfg.styleByState && cfg.styleByState[dom]?.inset) ?? cfg.highlightInset ?? 4, 4);
-  const radius = N((cfg.styleByState && cfg.styleByState[dom]?.radius) ?? cfg.highlightRadius ?? 20, 20);
+  const inset = N(
+    (cfg.styleByState && cfg.styleByState[dom]?.inset) ??
+      cfg.highlightInset ??
+      4,
+    4
+  );
+  const radius = N(
+    (cfg.styleByState && cfg.styleByState[dom]?.radius) ??
+      cfg.highlightRadius ??
+      20,
+    20
+  );
 
   const x = N(b.x) + inset;
   const yTop = N(b.y) + inset;
@@ -165,9 +173,6 @@ function paintStateHighlight(page3, dom, cfg = {}) {
   const fillColor = cfg.fillColor || { r: 0.4, g: 0.6, b: 0.9 };
   const strokeColor = cfg.strokeColor || { r: 0.0, g: 0.2, b: 0.6 };
 
-  const path = page3.getContentStream();
-
-  // For simplicity, we just draw a rounded rectangle via rectangles+circles approximation
   page3.drawRectangle({
     x,
     y,
@@ -180,7 +185,7 @@ function paintStateHighlight(page3, dom, cfg = {}) {
     borderOpacity: strokeOpacity,
   });
 
-  // anchor where we can drop "YOU ARE HERE" label
+  // anchor for label (YOU ARE HERE / crown)
   const labelX = x + w / 2 + (cfg.labelOffsetX || 0);
   const labelY = y + h + (cfg.labelOffsetY || 12);
   return { labelX, labelY };
@@ -197,6 +202,7 @@ function resolveDomKey(dom, domChar, domDesc) {
   return "R";
 }
 
+/* parse ?data=… param (base64/json) */
 function parseDataParam(b64ish) {
   if (!b64ish) return {};
   let s = String(b64ish);
@@ -212,7 +218,7 @@ function parseDataParam(b64ish) {
   }
 }
 
-/* GET/POST payload reader (supports ?data= and JSON body) */
+/* GET/POST payload reader */
 async function readPayload(req) {
   const q = req.method === "POST" ? (req.body || {}) : (req.query || {});
   if (q.data) return parseDataParam(q.data);
@@ -220,74 +226,145 @@ async function readPayload(req) {
   return {};
 }
 
-/* normalise all the weird incoming shapes into a friendlier P object */
+/* ───────────── normalise new CTRL PoC payload ───────────── */
+/**
+ * Accepts:
+ *  - new canonical payload from Botpress:
+ *      { identity, ctrl, text, workWith, actions, chart }
+ *  - older PoC payloads with p3:/p4:/p5: keys
+ * and returns P with:
+ *  - generic fields (name, dateLbl, dom, domState, chartUrl, raw, ctrlMeta)
+ *  - page-aligned fields P["p3:exec"], P["p5:freq"], etc.
+ */
 function normaliseInput(d = {}) {
-  const wcol = Array.isArray(d.workwcol)
-    ? d.workwcol.map((x) => ({ look: norm(x?.look || ""), work: norm(x?.work || "") }))
-    : [];
-  const wldr = Array.isArray(d.workwlead)
-    ? d.workwlead.map((x) => ({ look: norm(x?.look || ""), work: norm(x?.work || "") }))
-    : [];
+  const identity = d.identity || {};
+  const ctrl = d.ctrl || {};
+  const text = d.text || {};
+  const workWith = d.workWith || {};
+  const actionsObj = d.actions || {};
+  const chart = d.chart || {};
 
-  const tipsIn = d.tips ?? d.tipsText ?? (d.clientTipsActions && d.clientTipsActions.tips);
-  const actsIn =
-    d.actions ??
-    d.actionsText ??
-    (d.patternAction && d.patternAction.action) ??
-    (d.clientTipsActions && d.clientTipsActions.actions);
-
-  const tipsList = splitToList(tipsIn).map(cleanBullet).filter(Boolean).slice(0, 2);
-  const actsList = splitToList(actsIn).map(cleanBullet).filter(Boolean).slice(0, 2);
-
+  // Canonical name + date
   const nameCand =
     (d.person && d.person.fullName) ||
+    identity.fullName ||
+    identity.name ||
     d["p1:n"] ||
     d.fullName ||
-    (d.person && d.person.preferredName) ||
+    identity.preferredName ||
     d.preferredName ||
-    d.name;
+    d.name ||
+    "";
+
+  const dateLbl =
+    d.dateLbl ||
+    identity.dateLabel ||
+    identity.dateLbl ||
+    d.dateLabel ||
+    d["p1:d"] ||
+    "";
+
+  // Dominant + second state, counts/order
+  const domState =
+    ctrl.dominantState ||
+    d.domState ||
+    d.dom ||
+    d["p3:dom"] ||
+    "";
+  const dom2State =
+    ctrl.secondState ||
+    d.dom2 ||
+    d["p3:dom2"] ||
+    "";
+
+  const counts =
+    ctrl.counts ||
+    d.counts ||
+    d["p3:counts"] ||
+    {};
+  const order =
+    ctrl.order ||
+    d.order ||
+    d["p3:order"] ||
+    "";
+
+  // TLDR lines – split into up to 5 bullets for p3:tldr1..5
+  const tldrRaw =
+    text.tldr ||
+    d["p3:tldr"] ||
+    "";
+  const tldrLines = splitToList(tldrRaw).map(cleanBullet).slice(0, 5);
+
+  // Actions list from canonical object if present
+  const actsIn =
+    actionsObj.list ||
+    d.actions ||
+    d.actionsText ||
+    [];
+  const actsList = Array.isArray(actsIn)
+    ? actsIn.map((a) => cleanBullet(a.text || a))
+    : splitToList(actsIn).map(cleanBullet);
+  const act1 = actsList[0] || d["p9:action1"] || "";
+  const act2 = actsList[1] || d["p9:action2"] || "";
 
   const out = {
     raw: d,
     person: d.person || { fullName: nameCand || "" },
     name: nameCand || "",
-    dateLbl: d.dateLbl || d.dateLabel || d["p1:d"] || "",
-    dom: d.dom || "",
+    dateLbl,
+    dom: domState || "",
+    dom2: dom2State || "",
     domChar: d.domChar || "",
     domDesc: d.domDesc || "",
-    domState: d.domState || d.dom || "",
-    tips: tipsList,
+    domState,
+    counts,
+    order,
+    tips: [], // tips not used in PoC profile for now
     actions: actsList,
-    workwcol: wcol,
-    workwlead: wldr,
-    chartUrl: d.chartUrl || d["p5:chart"] || "",
+    chartUrl: chart.spiderUrl || d.chartUrl || d["p5:chart"] || "",
     layout: d.layout || null,
 
-    // PoC-specific keys will just flow through as-is; we reference them by
-    // their explicit names later (p3:exec, p4:stateDeep, p5:freq, etc.)
+    // PoC page-aligned fields (fallback to older keys if canonical missing)
     "p1:n": d["p1:n"] || nameCand || "",
-    "p1:d": d["p1:d"] || d.dateLbl || "",
-    "p3:dom": d["p3:dom"] || d.dom || "",
-    "p3:exec": d["p3:exec"] || "",
-    "p3:tldr1": d["p3:tldr1"] || "",
-    "p3:tldr2": d["p3:tldr2"] || "",
-    "p3:tldr3": d["p3:tldr3"] || "",
-    "p3:tldr4": d["p3:tldr4"] || "",
-    "p3:tldr5": d["p3:tldr5"] || "",
-    "p3:tip": d["p3:tip"] || "",
-    "p4:stateDeep": d["p4:stateDeep"] || "",
-    "p5:freq": d["p5:freq"] || "",
-    "p5:chart": d["p5:chart"] || d.chartUrl || "",
-    "p6:seq": d["p6:seq"] || "",
-    "p7:themesTop": d["p7:themesTop"] || "",
-    "p7:themesLow": d["p7:themesLow"] || "",
-    "p8:collabC": d["p8:collabC"] || "",
-    "p8:collabT": d["p8:collabT"] || "",
-    "p8:collabR": d["p8:collabR"] || "",
-    "p8:collabL": d["p8:collabL"] || "",
-    "p9:action1": d["p9:action1"] || "",
-    "p9:action2": d["p9:action2"] || "",
-    "p9:closing": d["p9:closing"] || "",
+    "p1:d": d["p1:d"] || dateLbl || "",
+
+    "p3:dom": d["p3:dom"] || domState || "",
+    "p3:exec": d["p3:exec"] || text.execSummary || "",
+    "p3:tldr1": d["p3:tldr1"] || tldrLines[0] || "",
+    "p3:tldr2": d["p3:tldr2"] || tldrLines[1] || "",
+    "p3:tldr3": d["p3:tldr3"] || tldrLines[2] || "",
+    "p3:tldr4": d["p3:tldr4"] || tldrLines[3] || "",
+    "p3:tldr5": d["p3:tldr5"] || tldrLines[4] || "",
+    "p3:tip": d["p3:tip"] || text.tipAction || "",
+
+    "p4:stateDeep":
+      d["p4:stateDeep"] || text.stateSubInterpretation || "",
+
+    "p5:freq": d["p5:freq"] || text.frequency || "",
+    "p5:chart":
+      d["p5:chart"] ||
+      chart.spiderUrl ||
+      d.chartUrl ||
+      "",
+
+    "p6:seq": d["p6:seq"] || text.sequence || "",
+
+    "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
+    "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
+
+    "p8:collabC":
+      d["p8:collabC"] || workWith.concealed || "",
+    "p8:collabT":
+      d["p8:collabT"] || workWith.triggered || "",
+    "p8:collabR":
+      d["p8:collabR"] || workWith.regulated || "",
+    "p8:collabL":
+      d["p8:collabL"] || workWith.lead || "",
+
+    "p9:action1": act1,
+    "p9:action2": act2,
+    "p9:closing":
+      d["p9:closing"] || actionsObj.closingNote || "",
   };
 
   return out;
@@ -334,9 +411,6 @@ export default async function handler(req, res) {
     const src = await readPayload(req);
     const P = normaliseInput(src);
 
-    // while stabilising, ignore remote layout (use locked layout in the template)
-    const ALLOW_REMOTE_LAYOUT = false;
-
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -355,7 +429,7 @@ export default async function handler(req, res) {
     const p11 = pageOrNull(pages, 10);
     const p12 = pageOrNull(pages, 11);
 
-    // Minimal layout anchors (coach/PoC templates may differ; we keep generous guards)
+    // Layout anchors (tl coords in pt)
     const L = {
       p1: {
         name: { x: 7, y: 473, w: 500, size: 30, align: "center" },
@@ -373,7 +447,7 @@ export default async function handler(req, res) {
           styleByState: {
             C: { radius: 28, inset: 6 },
             T: { radius: 28, inset: 6 },
-            R: { radius: 1000, inset: 1 },
+            R: { radius: 28, inset: 6 },
             L: { radius: 28, inset: 6 },
           },
           labelByState: {
@@ -457,28 +531,72 @@ export default async function handler(req, res) {
       },
     };
 
-    /* p1 — cover (unchanged layout) */
+    /* p1 — cover */
     if (p1 && P.name) drawTextBox(p1, font, P.name, L.p1.name);
     if (p1 && P.dateLbl) drawTextBox(p1, font, P.dateLbl, L.p1.date);
 
-    /* p3 — dominant state visual + Exec summary + TLDR + tip */
+    /* p3 — dominant + 2nd state visual + Exec / TLDR / tip */
     (function drawPage3() {
       if (!p3 || !L.p3) return;
 
-      // 1) Dominant highlight (4 boxes)
-      const domKey = resolveDomKey(P["p3:dom"] || P.dom, P.domChar, P.domDesc);
-      if (domKey && L.p3.state?.useAbsolute) {
-        const anchor = paintStateHighlight(p3, domKey, L.p3.state);
-        if (anchor && L.p3.state.labelText) {
+      const stateCfg = L.p3.state || {};
+      const raw = P.raw || {};
+      const ctrl = raw.ctrl || {};
+
+      // 1) find dominant + second states
+      const domKey = resolveDomKey(
+        P["p3:dom"] || P.dom || ctrl.dominantState,
+        P.domChar,
+        P.domDesc
+      );
+
+      let secondKey = "";
+      if (ctrl.secondState) {
+        secondKey = S(ctrl.secondState).trim().charAt(0).toUpperCase();
+      } else if (P.dom2) {
+        secondKey = S(P.dom2).trim().charAt(0).toUpperCase();
+      }
+
+      if (!["C", "T", "R", "L"].includes(secondKey)) {
+        // derive from counts if available
+        const counts = P.counts || ctrl.counts || {};
+        const keys = ["C", "T", "R", "L"];
+        const ranked = keys
+          .map((k) => ({ k, n: Number(counts[k] || 0) || 0 }))
+          .sort((a, b) => b.n - a.n);
+        const bestNonDom = ranked.find((r) => r.k !== domKey && r.n > 0);
+        if (bestNonDom) secondKey = bestNonDom.k;
+      }
+
+      // 2) draw subtle raise for 2nd strongest state (no label, lighter fill)
+      if (
+        secondKey &&
+        secondKey !== domKey &&
+        stateCfg.useAbsolute &&
+        stateCfg.absBoxes
+      ) {
+        const cfgSecond = {
+          ...stateCfg,
+          fillOpacity: 0.2,
+          strokeOpacity: 0.7,
+        };
+        paintStateHighlight(p3, secondKey, cfgSecond);
+      }
+
+      // 3) draw strong highlight for dominant state + YOU ARE HERE 👑 label
+      if (domKey && stateCfg.useAbsolute) {
+        const anchor = paintStateHighlight(p3, domKey, stateCfg);
+        if (anchor && stateCfg.labelText) {
+          const labelText = `${stateCfg.labelText} 👑`;
           drawTextBox(
             p3,
             font,
-            String(L.p3.state.labelText),
+            labelText,
             {
               x: anchor.labelX,
               y: anchor.labelY,
               w: 180,
-              size: L.p3.state.labelSize || 10,
+              size: stateCfg.labelSize || 10,
               align: "center",
             },
             { maxLines: 1 }
@@ -486,7 +604,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // 2) Exec summary + TLDR + tip in main body
+      // 4) Exec summary + TLDR + tip
       const exec = norm(P["p3:exec"]);
       const tldrs = [
         norm(P["p3:tldr1"]),
@@ -504,11 +622,13 @@ export default async function handler(req, res) {
 
       const body = blocks.join("\n\n\n");
       if (body && L.p3.domDesc) {
-        drawTextBox(p3, font, body, L.p3.domDesc, { maxLines: L.p3.domDesc.maxLines });
+        drawTextBox(p3, font, body, L.p3.domDesc, {
+          maxLines: L.p3.domDesc.maxLines,
+        });
       }
     })();
 
-    /* p4 — deep state / sub-state interpretation (PoC_StateSub_Interpretation) */
+    /* p4 — state / sub-state deep dive */
     if (p4 && L.p4?.spider && P["p4:stateDeep"]) {
       drawTextBox(
         p4,
@@ -519,11 +639,8 @@ export default async function handler(req, res) {
       );
     }
 
-    /* p5 — spider chart + frequency narrative
-       PoC_Frequency_Text → P["p5:freq"]
-       Spider chart URL   → P["p5:chart"] (QuickChart URL) */
+    /* p5 — frequency narrative + spider chart */
     if (p5) {
-      // Frequency narrative
       if (L.p5?.seqpat && P["p5:freq"]) {
         drawTextBox(
           p5,
@@ -534,7 +651,6 @@ export default async function handler(req, res) {
         );
       }
 
-      // Spider chart (reuse chart anchor from page 4 layout)
       let chartUrl = norm(P["p5:chart"] || P.spiderChartUrl || P.chartUrl);
       if (chartUrl && L.p4?.chart) {
         try {
@@ -542,7 +658,6 @@ export default async function handler(req, res) {
           u.searchParams.set("v", Date.now().toString(36));
           chartUrl = u.toString();
         } catch {}
-
         const img = await embedRemoteImage(pdfDoc, chartUrl);
         if (img) {
           const H = p5.getHeight();
@@ -552,8 +667,7 @@ export default async function handler(req, res) {
       }
     }
 
-    /* p6 — sequence narrative
-       PoC_Sequence_Text → P["p6:seq"] */
+    /* p6 — sequence narrative */
     if (p6 && L.p6?.themeExpl && P["p6:seq"]) {
       drawTextBox(
         p6,
@@ -564,15 +678,13 @@ export default async function handler(req, res) {
       );
     }
 
-    /* p7 — themes (top + low)
-       PoC_Themes_Top → P["p7:themesTop"]
-       PoC_Themes_Low → P["p7:themesLow"] */
+    /* p7 — themes (top + low) */
     if (p7 && Array.isArray(L.p7?.colBoxes) && L.p7.colBoxes.length >= 2) {
       const top = norm(P["p7:themesTop"]);
       const low = norm(P["p7:themesLow"]);
 
       if (top) {
-        const box = L.p7.colBoxes[0]; // left column
+        const box = L.p7.colBoxes[0]; // left
         drawTextBox(
           p7,
           font,
@@ -583,7 +695,7 @@ export default async function handler(req, res) {
       }
 
       if (low) {
-        const box = L.p7.colBoxes[1]; // right column
+        const box = L.p7.colBoxes[1]; // right
         drawTextBox(
           p7,
           font,
@@ -594,8 +706,7 @@ export default async function handler(req, res) {
       }
     }
 
-    /* p8 — Work-with paragraphs (C/T/R/L)
-       PoC_WorkWith_* → P["p8:collabC/T/R/L"] */
+    /* p8 — Work-with paragraphs (C/T/R/L) */
     if (p8 && Array.isArray(L.p8?.colBoxes) && L.p8.colBoxes.length >= 4) {
       const mapIdx = { C: 0, T: 1, R: 2, L: 3 };
       const txtByState = {
@@ -622,9 +733,7 @@ export default async function handler(req, res) {
       }
     }
 
-    /* p9 — Actions + closing note
-       PoC_Actions_List        → P["p9:action1"], P["p9:action2"]
-       PoC_Actions_ClosingNote → P["p9:closing"] */
+    /* p9 — Actions + closing note */
     if (p9 && L.p11) {
       const tidy = (s) =>
         norm(String(s || ""))
@@ -654,7 +763,7 @@ export default async function handler(req, res) {
       if (closing) drawBullet(p9, tipsSlots[0], closing);
     }
 
-    /* Optional: simple footer label on p2..p12 (existing behaviour) */
+    /* footer label on p2..p12 */
     const footerLabel = norm(P.name);
     const putFooter = (page) => {
       if (!page || !footerLabel) return;
@@ -675,6 +784,8 @@ export default async function handler(req, res) {
     res.send(Buffer.from(bytes));
   } catch (err) {
     console.error("PDF handler error:", err);
-    res.status(500).json({ error: "Failed to generate PDF", detail: err?.message || String(err) });
+    res
+      .status(500)
+      .json({ error: "Failed to generate PDF", detail: err?.message || String(err) });
   }
 }
