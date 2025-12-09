@@ -149,8 +149,8 @@ function drawShadowL(page, absBox, strength = 1) {
   const h = rect.h;
 
   // Tune these numbers to match your template shadow thickness
-  const sideWidth  = 18 * strength;   // right-hand bar
-  const baseHeight = 18 * strength;   // bottom bar
+  const sideWidth = 18 * strength; // right-hand bar
+  const baseHeight = 18 * strength; // bottom bar
 
   // bottom bar
   page.drawRectangle({
@@ -223,6 +223,7 @@ async function readPayload(req) {
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const ctrl = d.ctrl || {};
+  const summary = ctrl.summary || {};
   const text = d.text || {};
   const workWith = d.workWith || {};
   const actionsObj = d.actions || {};
@@ -247,12 +248,30 @@ function normaliseInput(d = {}) {
     d["p1:d"] ||
     "";
 
+  // dominant + second state (accepts new ctrl.dominant)
   const domState =
-    ctrl.dominantState || d.domState || d.dom || d["p3:dom"] || "";
-  const dom2State =
-    ctrl.secondState || d.dom2 || d["p3:dom2"] || "";
+    ctrl.dominant ||
+    ctrl.dominantState ||
+    d.domState ||
+    d.dom ||
+    d["p3:dom"] ||
+    "";
 
-  const counts = ctrl.counts || d.counts || d["p3:counts"] || {};
+  const dom2State =
+    ctrl.secondState ||
+    d.dom2 ||
+    d["p3:dom2"] ||
+    "";
+
+  // counts (4 state): from ctrl.counts OR summary.counts/stateFrequency
+  const counts =
+    ctrl.counts ||
+    summary.counts ||
+    summary.stateFrequency ||
+    d.counts ||
+    d["p3:counts"] ||
+    {};
+
   const order = ctrl.order || d.order || d["p3:order"] || "";
 
   const tldrRaw = text.tldr || d["p3:tldr"] || "";
@@ -264,6 +283,14 @@ function normaliseInput(d = {}) {
     : splitToList(actsIn).map(cleanBullet);
   const act1 = actsList[0] || d["p9:action1"] || "";
   const act2 = actsList[1] || d["p9:action2"] || "";
+
+  const chartUrl =
+    chart.spiderUrl ||
+    d.spiderChartUrl ||
+    d.spiderChartURL ||
+    d.chartUrl ||
+    d["p5:chart"] ||
+    "";
 
   const out = {
     raw: d,
@@ -279,8 +306,11 @@ function normaliseInput(d = {}) {
     order,
     tips: [],
     actions: actsList,
-    chartUrl: chart.spiderUrl || d.chartUrl || d["p5:chart"] || "",
+    chartUrl,
     layout: d.layout || null,
+
+    // passthrough for any 12-band data if you want later
+    bands: ctrl.bands || summary.bands || d.bands || {},
 
     "p1:n": d["p1:n"] || nameCand || "",
     "p1:d": d["p1:d"] || dateLbl || "",
@@ -297,8 +327,7 @@ function normaliseInput(d = {}) {
     "p4:stateDeep": d["p4:stateDeep"] || text.stateSubInterpretation || "",
 
     "p5:freq": d["p5:freq"] || text.frequency || "",
-    "p5:chart":
-      d["p5:chart"] || chart.spiderUrl || d.chartUrl || "",
+    "p5:chart": d["p5:chart"] || chartUrl || "",
 
     "p6:seq": d["p6:seq"] || text.sequence || "",
 
@@ -572,10 +601,11 @@ export default async function handler(req, res) {
       const stateCfg = L.p3.state || {};
       const raw = P.raw || {};
       const ctrl = raw.ctrl || {};
+      const summary = ctrl.summary || {};
 
       // 1) dominant + second state
       const domKey = resolveDomKey(
-        P["p3:dom"] || P.dom || ctrl.dominantState,
+        P["p3:dom"] || P.dom || ctrl.dominant || ctrl.dominantState,
         P.domChar,
         P.domDesc
       );
@@ -588,7 +618,12 @@ export default async function handler(req, res) {
       }
 
       if (!["C", "T", "R", "L"].includes(secondKey)) {
-        const counts = P.counts || ctrl.counts || {};
+        const counts =
+          P.counts ||
+          ctrl.counts ||
+          summary.counts ||
+          summary.stateFrequency ||
+          {};
         const keys = ["C", "T", "R", "L"];
         const ranked = keys
           .map((k) => ({ k, n: Number(counts[k] || 0) || 0 }))
@@ -661,7 +696,9 @@ export default async function handler(req, res) {
           const u = new URL(chartUrl);
           u.searchParams.set("v", Date.now().toString(36));
           chartUrl = u.toString();
-        } catch {}
+        } catch {
+          // ignore URL parse errors, try as-is
+        }
         const img = await embedRemoteImage(pdfDoc, chartUrl);
         if (img) {
           const H = p4.getHeight();
@@ -807,11 +844,9 @@ export default async function handler(req, res) {
     res.send(Buffer.from(bytes));
   } catch (err) {
     console.error("PDF handler error:", err);
-    res
-      .status(500)
-      .json({
-        error: "Failed to generate PDF",
-        detail: err?.message || String(err),
-      });
+    res.status(500).json({
+      error: "Failed to generate PDF",
+      detail: err?.message || String(err),
+    });
   }
 }
