@@ -187,32 +187,44 @@ function resolveDomKey(dom, domChar, domDesc) {
 function parseDataParam(raw) {
   if (!raw) return {};
 
-  // 1) Try direct JSON (Vercel often gives decoded query)
+  const enc = String(raw);
+
+  // 1) Try direct JSON first (most likely with Next.js query parsing)
   try {
-    return JSON.parse(String(raw));
+    const obj = JSON.parse(enc);
+    console.log("[fill-template] parseDataParam: parsed direct JSON");
+    return obj;
   } catch {
     // ignore
   }
 
-  // 2) Try JSON after decodeURIComponent
+  // 2) Try decodeURIComponent + JSON
+  let decoded = enc;
   try {
-    const decoded = decodeURIComponent(String(raw));
-    return JSON.parse(decoded);
+    decoded = decodeURIComponent(enc);
+  } catch {
+    // ignore if not URI encoded
+  }
+  try {
+    const obj = JSON.parse(decoded);
+    console.log("[fill-template] parseDataParam: parsed decoded JSON");
+    return obj;
   } catch {
     // ignore
   }
 
   // 3) Try base64-encoded JSON (legacy behaviour)
   try {
-    let b64 = String(raw).replace(/-/g, "+").replace(/_/g, "/");
+    let b64 = decoded.replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
     const txt = Buffer.from(b64, "base64").toString("utf8");
-    return JSON.parse(txt);
+    const obj = JSON.parse(txt);
+    console.log("[fill-template] parseDataParam: parsed base64 JSON");
+    return obj;
   } catch {
-    // ignore
+    console.warn("[fill-template] parseDataParam: failed to parse payload");
+    return {};
   }
-
-  return {};
 }
 
 /* GET/POST payload reader */
@@ -425,7 +437,20 @@ export default async function handler(req, res) {
     const tpl = S(q.tpl || defaultTpl).replace(/[^A-Za-z0-9._-]/g, "");
 
     const src = await readPayload(req);
+
+    console.log("[fill-template] DEBUG_DATE_SRC", {
+      dateLbl: src.dateLbl || null,
+      dateLabel: src.dateLabel || null,
+      identity_dateLabel:
+        src.identity && (src.identity.dateLabel || src.identity.dateLbl) || null
+    });
+
     const P = normaliseInput(src);
+
+    console.log("[fill-template] DEBUG_DATE_NORMALISED", {
+      P_dateLbl: P.dateLbl || null,
+      P_p1d: P["p1:d"] || null
+    });
 
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
