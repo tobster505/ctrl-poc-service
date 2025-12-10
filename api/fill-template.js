@@ -739,7 +739,81 @@ export default async function handler(req, res) {
           },
           labelSize: 12,
           labelOffsetTop: 18,
-          // optional: layout.p3.state.scenarios["C_T"] etc can override label + images
+          // scenario-specific overrides for "YOU ARE HERE!" + images
+          scenarios: {
+            // 1. C + T
+            C_T: {
+              label: { x: 58, y: 235, w: 188, size: 12, align: "center" },
+              domImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+              secondImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+            },
+            // 2. C + R
+            C_R: {
+              label: { x: 58, y: 235, w: 188, size: 12, align: "center" },
+              domImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+              secondImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+            },
+            // 3. C + L
+            C_L: {
+              label: { x: 58, y: 235, w: 188, size: 12, align: "center" },
+              domImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+              secondImg: { x: 366, y: 380, w: 60, h: 60 }, // above L
+            },
+            // 4. T + C
+            T_C: {
+              label: { x: 299, y: 235, w: 196, size: 12, align: "center" },
+              domImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+              secondImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+            },
+            // 5. T + R
+            T_R: {
+              label: { x: 299, y: 235, w: 196, size: 12, align: "center" },
+              domImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+              secondImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+            },
+            // 6. T + L
+            T_L: {
+              label: { x: 299, y: 235, w: 196, size: 12, align: "center" },
+              domImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+              secondImg: { x: 366, y: 380, w: 60, h: 60 }, // above L
+            },
+            // 7. R + C
+            R_C: {
+              label: { x: 60, y: 410, w: 188, size: 12, align: "center" },
+              domImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+              secondImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+            },
+            // 8. R + T
+            R_T: {
+              label: { x: 60, y: 410, w: 188, size: 12, align: "center" },
+              domImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+              secondImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+            },
+            // 9. R + L
+            R_L: {
+              label: { x: 60, y: 410, w: 188, size: 12, align: "center" },
+              domImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+              secondImg: { x: 366, y: 380, w: 60, h: 60 }, // above L
+            },
+            // 10. L + C
+            L_C: {
+              label: { x: 298, y: 407, w: 195, size: 12, align: "center" },
+              domImg: { x: 366, y: 375, w: 60, h: 60 }, // above L
+              secondImg: { x: 122, y: 205, w: 60, h: 60 }, // above C
+            },
+            // 11. L + T
+            L_T: {
+              label: { x: 298, y: 407, w: 195, size: 12, align: "center" },
+              domImg: { x: 366, y: 375, w: 60, h: 60 }, // above L
+              secondImg: { x: 367, y: 205, w: 60, h: 60 }, // above T
+            },
+            // 12. L + R
+            L_R: {
+              label: { x: 298, y: 407, w: 195, size: 12, align: "center" },
+              domImg: { x: 366, y: 375, w: 60, h: 60 }, // above L
+              secondImg: { x: 124, y: 380, w: 60, h: 60 }, // above R
+            },
+          },
         },
       },
       p4: {
@@ -928,7 +1002,7 @@ export default async function handler(req, res) {
         comboKey && scenarios[comboKey] ? scenarios[comboKey] : null;
 
       // NOTE: L-shaped shadows deliberately removed from page 3.
-      // drawShadowL is no longer called here.
+      // drawShadowL is not called here.
 
       // "YOU ARE HERE!" label
       if (domKey && absBoxes[domKey]) {
