@@ -89,10 +89,18 @@ function makeSpiderChartUrl12(bandsRaw) {
     type: "radar",
     data: {
       labels: [
-        "C", "", "",
-        "T", "", "",
-        "R", "", "",
-        "L", "", ""
+        "C",
+        "",
+        "",
+        "T",
+        "",
+        "",
+        "R",
+        "",
+        "",
+        "L",
+        "",
+        "",
       ],
       datasets: [
         {
@@ -113,9 +121,9 @@ function makeSpiderChartUrl12(bandsRaw) {
           pointHitRadius: 0,
           pointBackgroundColor: "rgba(75, 46, 131, 1)",
           pointBorderColor: "#ffffff",
-          pointBorderWidth: 0
-        }
-      ]
+          pointBorderWidth: 0,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -123,10 +131,10 @@ function makeSpiderChartUrl12(bandsRaw) {
       plugins: {
         legend: { display: false },
         tooltip: { enabled: false },
-        title: { display: false }
+        title: { display: false },
       },
       layout: {
-        padding: 10
+        padding: 10,
       },
       scales: {
         r: {
@@ -137,28 +145,28 @@ function makeSpiderChartUrl12(bandsRaw) {
             showLabelBackdrop: false,
             backdropColor: "transparent",
             color: "#777777",
-            font: { size: 11 }
+            font: { size: 11 },
           },
           grid: {
             circular: true,
             color: "rgba(0, 0, 0, 0.16)",
-            lineWidth: 1.8
+            lineWidth: 1.8,
           },
           angleLines: {
             color: "rgba(0, 0, 0, 0.18)",
-            lineWidth: 1.2
+            lineWidth: 1.2,
           },
           pointLabels: {
             font: { size: 26, weight: "900" },
             color: "#333333",
-            padding: 9
-          }
-        }
+            padding: 9,
+          },
+        },
       },
       elements: {
-        line: { tension: 0.4 }
-      }
-    }
+        line: { tension: 0.4 },
+      },
+    },
   };
 
   const json = JSON.stringify(cfg);
@@ -183,8 +191,7 @@ async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
   if (!pdfDoc || !page || !box || !bandsRaw) return;
 
   const hasAny =
-    bandsRaw &&
-    Object.values(bandsRaw).some((v) => Number(v) > 0);
+    bandsRaw && Object.values(bandsRaw).some((v) => Number(v) > 0);
   if (!hasAny) return;
 
   const url = makeSpiderChartUrl12(bandsRaw);
@@ -447,11 +454,7 @@ function normaliseInput(d = {}) {
     d["p3:dom"] ||
     "";
 
-  const dom2State =
-    ctrl.secondState ||
-    d.dom2 ||
-    d["p3:dom2"] ||
-    "";
+  const dom2State = ctrl.secondState || d.dom2 || d["p3:dom2"] || "";
 
   // counts (4 state): from ctrl.counts OR summary.counts/stateFrequency
   const counts =
@@ -563,7 +566,9 @@ async function loadTemplateBytesLocal(fname) {
     }
   }
   throw new Error(
-    `Template not found in any known path for /public: ${fname} (${lastErr?.message || "no detail"})`
+    `Template not found in any known path for /public: ${fname} (${
+      lastErr?.message || "no detail"
+    })`
   );
 }
 
@@ -589,8 +594,70 @@ async function loadAssetBytes(fname) {
     }
   }
   throw new Error(
-    `Asset not found in any known path for /public: ${fname} (${lastErr?.message || "no detail"})`
+    `Asset not found in any known path for /public: ${fname} (${
+      lastErr?.message || "no detail"
+    })`
   );
+}
+
+/* ───────────── layout helpers / overrides ───────────── */
+
+function isPlainObject(obj) {
+  return obj && typeof obj === "object" && !Array.isArray(obj);
+}
+
+function mergeLayout(base, override) {
+  if (!isPlainObject(base)) return base;
+  const out = { ...base };
+  if (!isPlainObject(override)) return out;
+
+  for (const [k, v] of Object.entries(override)) {
+    if (isPlainObject(v) && isPlainObject(out[k])) {
+      out[k] = mergeLayout(out[k], v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/* apply simple query-string overrides like Execx, Execy, etc. */
+function applyQueryLayoutOverrides(L, q) {
+  if (!L || !q) return;
+
+  const num = (k, fb) => (q[k] != null ? (Number(q[k]) || fb) : fb);
+
+  // Example: Exec summary box on p3 (Execx, Execy, Execw, Execmaxlines)
+  if (L.p3 && L.p3.domDesc) {
+    const box = L.p3.domDesc;
+    L.p3.domDesc = {
+      ...box,
+      x: num("Execx", box.x),
+      y: num("Execy", box.y),
+      w: num("Execw", box.w),
+      maxLines: num(
+        "Execmaxlines",
+        typeof box.maxLines === "number" ? box.maxLines : 12
+      ),
+    };
+  }
+}
+
+/* embed a local PNG from /public into a TL box */
+async function embedLocalPng(pdfDoc, page, box, fname) {
+  if (!pdfDoc || !page || !box || !fname) return;
+  const bytes = await loadAssetBytes(fname);
+  const img = await pdfDoc.embedPng(bytes);
+
+  const H = page.getHeight();
+  const { x, y, w, h } = box;
+
+  page.drawImage(img, {
+    x,
+    y: H - y - h,
+    width: w,
+    height: h,
+  });
 }
 
 /* safe page accessors */
@@ -609,14 +676,16 @@ export default async function handler(req, res) {
       dateLbl: src.dateLbl || null,
       dateLabel: src.dateLabel || null,
       identity_dateLabel:
-        src.identity && (src.identity.dateLabel || src.identity.dateLbl) || null
+        (src.identity &&
+          (src.identity.dateLabel || src.identity.dateLbl)) ||
+        null,
     });
 
     const P = normaliseInput(src);
 
     console.log("[fill-template] DEBUG_DATE_NORMALISED", {
       P_dateLbl: P.dateLbl || null,
-      P_p1d: P["p1:d"] || null
+      P_p1d: P["p1:d"] || null,
     });
 
     const pdfBytes = await loadTemplateBytesLocal(tpl);
@@ -638,7 +707,7 @@ export default async function handler(req, res) {
     const p12 = pageOrNull(pages, 11);
 
     // Layout anchors (tl coords in pt)
-    const L = {
+    let L = {
       p1: {
         name: { x: 7, y: 473, w: 500, size: 30, align: "center" },
         date: { x: 210, y: 600, w: 500, size: 25, align: "left" },
@@ -670,6 +739,7 @@ export default async function handler(req, res) {
           },
           labelSize: 12,
           labelOffsetTop: 18,
+          // optional: layout.p3.state.scenarios["C_T"] etc can override label + images
         },
       },
       p4: {
@@ -786,6 +856,14 @@ export default async function handler(req, res) {
       },
     };
 
+    // 1) merge any layout overrides coming from payload.data.layout
+    if (P.layout && typeof P.layout === "object") {
+      L = mergeLayout(L, P.layout);
+    }
+
+    // 2) apply simple query-string tweaks (Execx, Execy, Execw, Execmaxlines)
+    applyQueryLayoutOverrides(L, q);
+
     /* p1 — cover (name + date) */
     if (p1 && L.p1) {
       const nameText =
@@ -800,8 +878,8 @@ export default async function handler(req, res) {
       }
     }
 
-    /* p3 — dominant / second state shadows + "YOU ARE HERE!" + Exec / TLDR / tip */
-    (function drawPage3() {
+    /* p3 — dominant / second state shadows + "YOU ARE HERE!" + Exec / TLDR / tip + scenario images */
+    await (async function drawPage3() {
       if (!p3 || !L.p3) return;
 
       const stateCfg = L.p3.state || {};
@@ -840,6 +918,15 @@ export default async function handler(req, res) {
 
       const absBoxes = stateCfg.absBoxes || {};
 
+      // combination key for layout.scenarios (e.g. "C_T", "C_R", etc.)
+      const comboKey =
+        domKey && secondKey && secondKey !== domKey
+          ? `${domKey}_${secondKey}`
+          : "";
+      const scenarios = stateCfg.scenarios || {};
+      const comboCfg =
+        comboKey && scenarios[comboKey] ? scenarios[comboKey] : null;
+
       // 2) 2nd place shadow (lighter / smaller)
       if (secondKey && secondKey !== domKey && absBoxes[secondKey]) {
         drawShadowL(p3, absBoxes[secondKey], 0.7);
@@ -850,17 +937,63 @@ export default async function handler(req, res) {
         drawShadowL(p3, absBoxes[domKey], 1.2);
       }
 
-      // 4) "YOU ARE HERE!" label above dominant card
+      // 4) "YOU ARE HERE!" label
       if (domKey && absBoxes[domKey]) {
         const b = absBoxes[domKey];
-        const labelBox = {
+
+        // default label box (as before)
+        const defaultLabelBox = {
           x: b.x,
           y: b.y - (stateCfg.labelOffsetTop || 18),
           w: b.w,
           size: stateCfg.labelSize || 12,
           align: "center",
         };
+
+        // if layout.state.scenarios["C_T"].label exists, use that instead
+        const labelBox = comboCfg && comboCfg.label ? comboCfg.label : defaultLabelBox;
+
         drawTextBox(p3, font, "YOU ARE HERE!", labelBox, { maxLines: 1 });
+      }
+
+      // 4b) Scenario-based images on p3
+      // - dominant image: "dominant state.png"
+      // - second image:   "2nd state.png"
+      //
+      // You control positions via payload.layout.p3.state.scenarios, e.g.:
+      //
+      // layout: {
+      //   p3: {
+      //     state: {
+      //       scenarios: {
+      //         "C_T": {
+      //           domImg:   { x: 280, y: 220, w: 60, h: 60 },
+      //           secondImg:{ x:  80, y: 220, w: 60, h: 60 },
+      //           label:    { x: 200, y: 210, w: 200, size: 12, align: "center" }
+      //         }
+      //       }
+      //     }
+      //   }
+      // }
+      //
+      if (comboCfg) {
+        if (comboCfg.domImg) {
+          await embedLocalPng(
+            pdfDoc,
+            p3,
+            comboCfg.domImg,
+            "dominant state.png"
+          );
+        }
+
+        if (comboCfg.secondImg && secondKey && secondKey !== domKey) {
+          await embedLocalPng(
+            pdfDoc,
+            p3,
+            comboCfg.secondImg,
+            "2nd state.png"
+          );
+        }
       }
 
       // 5) Exec summary + TLDR + tip
@@ -914,6 +1047,18 @@ export default async function handler(req, res) {
           (P.raw && P.raw.bands) ||
           {};
 
+        // 1) hide any existing purple shape in the template under the chart
+        const H = p5.getHeight();
+        const { x, y, w, h } = L.p5.chart;
+        p5.drawRectangle({
+          x,
+          y: H - y - h,
+          width: w,
+          height: h,
+          color: rgb(1, 1, 1), // white rectangle to cover the baked-in shape
+        });
+
+        // 2) draw the dynamic QuickChart radar on top
         await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bands);
       }
     }
@@ -936,7 +1081,13 @@ export default async function handler(req, res) {
           p7,
           font,
           top,
-          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
+          {
+            x: box.x,
+            y: box.y,
+            w: box.w,
+            size: L.p7.bodySize || 13,
+            align: "left",
+          },
           { maxLines: L.p7.maxLines || 15 }
         );
       }
@@ -947,7 +1098,13 @@ export default async function handler(req, res) {
           p7,
           font,
           low,
-          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
+          {
+            x: box.x,
+            y: box.y,
+            w: box.w,
+            size: L.p7.bodySize || 13,
+            align: "left",
+          },
           { maxLines: L.p7.maxLines || 15 }
         );
       }
@@ -974,7 +1131,13 @@ export default async function handler(req, res) {
           p8,
           font,
           txt,
-          { x: box.x, y: box.y, w: box.w, size: L.p8.bodySize || 13, align: "left" },
+          {
+            x: box.x,
+            y: box.y,
+            w: box.w,
+            size: L.p8.bodySize || 13,
+            align: "left",
+          },
           { maxLines: L.p8.maxLines || 15 }
         );
       }
@@ -988,7 +1151,8 @@ export default async function handler(req, res) {
           .replace(/^\s*(tips?|tip)\s*:?\s*/i, "")
           .replace(/^\s*(actions?|next\s*action)\s*:?\s*/i, "")
           .trim();
-      const good = (s) => s && s.length >= 3 && !/^tips?$|^actions?$/i.test(s);
+      const good = (s) =>
+        s && s.length >= 3 && !/^tips?$|^actions?$/i.test(s);
 
       const actionsPacked = [tidy(P["p9:action1"]), tidy(P["p9:action2"])]
         .filter(good)
