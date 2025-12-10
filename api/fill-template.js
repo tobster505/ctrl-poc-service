@@ -100,12 +100,14 @@ function makeSpiderChartUrl12(bandsRaw) {
           fill: true,
           backgroundColor: "rgba(75, 46, 131, 0.30)",
           borderColor: "rgba(75, 46, 131, 1)",
-          borderWidth: 4,
-          // smoother line, rounded joins
-          tension: 0.55,
+          borderWidth: 3,
+          // smoother line, rounded joins but less bendy
+          tension: 0.4,
           borderJoinStyle: "round",
           borderCapStyle: "round",
-          // remove visible points
+          // keep drawing clipped to chart area
+          clip: 0,
+          // no visible points
           pointRadius: 0,
           pointHoverRadius: 0,
           pointHitRadius: 0,
@@ -154,7 +156,7 @@ function makeSpiderChartUrl12(bandsRaw) {
         }
       },
       elements: {
-        line: { tension: 0.55 }
+        line: { tension: 0.4 }
       }
     }
   };
@@ -170,7 +172,6 @@ function makeSpiderChartUrl12(bandsRaw) {
     encodeURIComponent(json)
   );
 }
-
 
 /**
  * Render the radar chart by:
@@ -680,7 +681,6 @@ export default async function handler(req, res) {
           align: "left",
           maxLines: 15,
         },
-        chart: { x: 35, y: 235, w: 540, h: 260 },
       },
       p5: {
         seqpat: {
@@ -691,6 +691,8 @@ export default async function handler(req, res) {
           align: "left",
           maxLines: 12,
         },
+        // chart now lives on page 5
+        chart: { x: 35, y: 235, w: 540, h: 260 },
       },
       p6: {
         theme: null,
@@ -885,33 +887,35 @@ export default async function handler(req, res) {
       }
     })();
 
-    /* p4 — state / sub-state deep dive + spider chart */
+    /* p4 — state / sub-state deep dive (text only) */
     if (p4 && L.p4) {
       if (L.p4.spider && P["p4:stateDeep"]) {
         drawTextBox(p4, font, norm(P["p4:stateDeep"]), L.p4.spider, {
           maxLines: L.p4.spider.maxLines,
         });
       }
+    }
 
-      // Spider chart on p4 — rendered from 12-band CTRL data via QuickChart
-      if (L.p4.chart) {
+    /* p5 — frequency narrative + spider chart */
+    if (p5 && L.p5) {
+      if (L.p5.seqpat && P["p5:freq"]) {
+        drawTextBox(p5, font, norm(P["p5:freq"]), L.p5.seqpat, {
+          maxLines: L.p5.seqpat.maxLines,
+        });
+      }
+
+      if (L.p5.chart) {
         const bands =
           P.bands ||
           (P.raw &&
             P.raw.ctrl &&
-            (P.raw.ctrl.bands || (P.raw.ctrl.summary && P.raw.ctrl.summary.bands))) ||
+            (P.raw.ctrl.bands ||
+              (P.raw.ctrl.summary && P.raw.ctrl.summary.bands))) ||
           (P.raw && P.raw.bands) ||
           {};
 
-        await embedRadarFromBands(pdfDoc, p4, L.p4.chart, bands);
+        await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bands);
       }
-    }
-
-    /* p5 — frequency narrative */
-    if (p5 && L.p5?.seqpat && P["p5:freq"]) {
-      drawTextBox(p5, font, norm(P["p5:freq"]), L.p5.seqpat, {
-        maxLines: L.p5.seqpat.maxLines,
-      });
     }
 
     /* p6 — sequence narrative */
