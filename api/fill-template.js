@@ -9,7 +9,6 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 
 /* ───────────── utilities ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
@@ -38,18 +37,14 @@ const cleanBullet = (s) =>
 /* brand colour for CTRL magenta (#A64E8C) */
 const BRAND = { r: 166 / 255, g: 78 / 255, b: 140 / 255 };
 
-/* chart.js server-side radar renderer (for spider chart) */
-const chartWidth = 700;
-const chartHeight = 700;
+/* ───────────── chart helpers (QuickChart, 12-band spider) ───────────── */
 
-const chartJSNodeCanvas = new ChartJSNodeCanvas({
-  width: chartWidth,
-  height: chartHeight,
-  backgroundColour: "transparent",
-});
-
-/* build radar config from 12-band CTRL data */
-function buildRadarConfigFromBands(bandsRaw) {
+/**
+ * Build a 12-axis radar chart URL from CTRL bands using QuickChart.
+ * Axes: C_low, C_mid, C_high, T_low, ..., L_high
+ * Labels: C / T / R / L (big), blanks for sub-points.
+ */
+function makeSpiderChartUrl12(bandsRaw) {
   const b = bandsRaw || {};
 
   const vals = [
@@ -90,7 +85,7 @@ function buildRadarConfigFromBands(bandsRaw) {
     }
   }
 
-  return {
+  const cfg = {
     type: "radar",
     data: {
       labels: [
@@ -123,7 +118,7 @@ function buildRadarConfigFromBands(bandsRaw) {
       ],
     },
     options: {
-      responsive: false,
+      responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
@@ -165,21 +160,38 @@ function buildRadarConfigFromBands(bandsRaw) {
       },
     },
   };
+
+  const json = JSON.stringify(cfg);
+
+  return (
+    "https://quickchart.io/chart" +
+    "?version=4" +
+    "&width=700&height=700" +
+    "&backgroundColor=rgba(0,0,0,0)" +
+    "&c=" +
+    encodeURIComponent(json)
+  );
 }
 
-/* embed radar chart into PDF page at a given TL box */
+/**
+ * Render the radar chart by:
+ *  - building the QuickChart URL from bands
+ *  - downloading the PNG via embedRemoteImage
+ *  - drawing it into the TL box on the page.
+ */
 async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
   if (!pdfDoc || !page || !box || !bandsRaw) return;
 
   const hasAny =
     bandsRaw &&
     Object.values(bandsRaw).some((v) => Number(v) > 0);
-
   if (!hasAny) return;
 
-  const config = buildRadarConfigFromBands(bandsRaw);
-  const pngBuffer = await chartJSNodeCanvas.renderToBuffer(config, "image/png");
-  const img = await pdfDoc.embedPng(pngBuffer);
+  const url = makeSpiderChartUrl12(bandsRaw);
+  if (!url) return;
+
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) return;
 
   const H = page.getHeight();
   const { x, y, w, h } = box;
@@ -882,7 +894,7 @@ export default async function handler(req, res) {
         });
       }
 
-      // Spider chart on p4 — rendered from 12-band CTRL data
+      // Spider chart on p4 — rendered from 12-band CTRL data via QuickChart
       if (L.p4.chart) {
         const bands =
           P.bands ||
