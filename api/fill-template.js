@@ -1,24 +1,29 @@
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+/**
+ * CTRL PoC Export Service · fill-template (Starter/PoC flow)
+ * Place at: /api/fill-template.js  (ctrl-poc-service)
+ */
+export const config = { runtime: "nodejs" };
+
+/* ───────────── imports ───────────── */
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* simple helpers */
-const S = (v: any) => (v == null ? "" : String(v));
-const N = (v: any, fb = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fb;
-};
-const norm = (s: string) =>
+/* ───────────── utilities ───────────── */
+const S = (v, fb = "") => (v == null ? String(fb) : String(v));
+const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const norm = (s) =>
   S(s)
     .replace(/\s+/g, " ")
     .trim();
 
-/* brand colour (magenta-ish) */
+/* brand colour */
 const BRAND = { r: 0.72, g: 0.06, b: 0.44 };
 
-/* TL → BL rect helper */
-const rectTLtoBL = (page: any, box: any, inset = 0) => {
+/* ───────── TL→BL rect helper ───────── */
+const rectTLtoBL = (page, box, inset = 0) => {
   const pageH = page.getHeight();
   const x = N(box.x) + inset;
   const w = Math.max(0, N(box.w) - inset * 2);
@@ -27,8 +32,8 @@ const rectTLtoBL = (page: any, box: any, inset = 0) => {
   return { x, y, w, h };
 };
 
-/* L-shaped magenta “shadow” under a card */
-function drawShadowL(page: any, absBox: any, strength = 1) {
+/* L-shaped magenta “shadow” under a card (kept for later use if needed) */
+function drawShadowL(page, absBox, strength = 1) {
   if (!page || !absBox) return;
 
   const rect = rectTLtoBL(page, absBox, 0);
@@ -57,22 +62,21 @@ function drawShadowL(page: any, absBox: any, strength = 1) {
   });
 }
 
-function resolveDomKey(dom: any, domChar: any, domDesc: any) {
+/* ───────── dominant / second state helpers ───────── */
+function resolveDomKey(dom, domChar, domDesc) {
   const d = S(dom || "").trim().charAt(0).toUpperCase();
   if (["C", "T", "R", "L"].includes(d)) return d;
+
   const s = S(domChar || domDesc || "").toLowerCase();
   if (/concealed/.test(s)) return "C";
   if (/triggered/.test(s)) return "T";
   if (/regulated/.test(s)) return "R";
   if (/lead/.test(s)) return "L";
-  return "R";
+
+  return "R"; // safe default
 }
 
-/**
- * Compute dominant + second-state single-letter keys ("C","T","R","L")
- * from the normalised payload.
- */
-function computeDomAndSecondKeys(P: any) {
+function computeDomAndSecondKeys(P) {
   const raw = (P && P.raw) || {};
   const ctrl = raw.ctrl || {};
   const summary = ctrl.summary || {};
@@ -108,35 +112,13 @@ function computeDomAndSecondKeys(P: any) {
   return { domKey, secondKey };
 }
 
-/* embed a local PNG from /public into a TL box */
-async function embedLocalPng(
-  pdfDoc: PDFDocument,
-  page: any,
-  box: any,
-  fname: string
-) {
-  if (!pdfDoc || !page || !box || !fname) return;
-  const bytes = await loadAssetBytes(fname);
-  const img = await pdfDoc.embedPng(bytes);
-
-  const H = page.getHeight();
-  const { x, y, w, h } = box;
-
-  page.drawImage(img, {
-    x,
-    y: H - y - h,
-    width: w,
-    height: h,
-  });
-}
-
-/* ───────────── robust data parser ───────────── */
-
-function parseDataParam(raw: any) {
+/* ───────── payload parsing ───────── */
+function parseDataParam(raw) {
   if (!raw) return {};
 
   const enc = String(raw);
 
+  // 1) try as plain JSON
   try {
     const obj = JSON.parse(enc);
     console.log("[fill-template] parseDataParam: parsed direct JSON");
@@ -145,6 +127,7 @@ function parseDataParam(raw: any) {
     // ignore
   }
 
+  // 2) decodeURIComponent then JSON
   let decoded = enc;
   try {
     decoded = decodeURIComponent(enc);
@@ -159,6 +142,7 @@ function parseDataParam(raw: any) {
     // ignore
   }
 
+  // 3) base64 → JSON
   try {
     let b64 = decoded.replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
@@ -172,8 +156,7 @@ function parseDataParam(raw: any) {
   }
 }
 
-/* GET/POST payload reader */
-async function readPayload(req: any) {
+async function readPayload(req) {
   if (req.method === "POST") {
     const body = req.body || {};
     if (body.data) return parseDataParam(body.data);
@@ -186,8 +169,8 @@ async function readPayload(req: any) {
   return {};
 }
 
-/* simple list + bullet cleaners */
-function splitToList(s: any): string[] {
+/* ───────── helpers for text / lists ───────── */
+function splitToList(s) {
   const txt = S(s || "");
   if (!txt) return [];
   return txt
@@ -196,14 +179,14 @@ function splitToList(s: any): string[] {
     .filter(Boolean);
 }
 
-function cleanBullet(s: any): string {
+function cleanBullet(s) {
   return S(s || "")
     .replace(/^[\-–—•·]\s*/i, "")
     .trim();
 }
 
-/* ───────────── normalise new CTRL PoC payload ───────────── */
-function normaliseInput(d: any = {}) {
+/* ───────── normalise INPUT into P ───────── */
+function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const ctrl = d.ctrl || {};
   const summary = ctrl.summary || {};
@@ -256,7 +239,7 @@ function normaliseInput(d: any = {}) {
 
   const actsIn = actionsObj.list || d.actions || d.actionsText || [];
   const actsList = Array.isArray(actsIn)
-    ? actsIn.map((a: any) => cleanBullet(a.text || a))
+    ? actsIn.map((a) => cleanBullet(a.text || a))
     : splitToList(actsIn).map(cleanBullet);
   const act1 = actsList[0] || d["p9:action1"] || "";
   const act2 = actsList[1] || d["p9:action2"] || "";
@@ -269,7 +252,7 @@ function normaliseInput(d: any = {}) {
     d["p5:chart"] ||
     "";
 
-  const out: any = {
+  const out = {
     raw: d,
     person: d.person || { fullName: nameCand || "" },
     name: nameCand || "",
@@ -322,9 +305,8 @@ function normaliseInput(d: any = {}) {
   return out;
 }
 
-/* ───────────── template + asset loaders ───────────── */
-
-async function loadTemplateBytesLocal(fname: string) {
+/* ───────── template + asset loaders ───────── */
+async function loadTemplateBytesLocal(fname) {
   if (!fname.endsWith(".pdf"))
     throw new Error(`Invalid template filename: ${fname}`);
 
@@ -339,7 +321,7 @@ async function loadTemplateBytesLocal(fname: string) {
     path.join(__dir, fname),
   ];
 
-  let lastErr: any;
+  let lastErr;
   for (const pth of candidates) {
     try {
       return await fs.readFile(pth);
@@ -354,8 +336,7 @@ async function loadTemplateBytesLocal(fname: string) {
   );
 }
 
-/* generic asset loader (kept for future assets if needed) */
-async function loadAssetBytes(fname: string) {
+async function loadAssetBytes(fname) {
   const __file = fileURLToPath(import.meta.url);
   const __dir = path.dirname(__file);
 
@@ -367,7 +348,7 @@ async function loadAssetBytes(fname: string) {
     path.join(__dir, fname),
   ];
 
-  let lastErr: any;
+  let lastErr;
   for (const pth of candidates) {
     try {
       return await fs.readFile(pth);
@@ -382,15 +363,14 @@ async function loadAssetBytes(fname: string) {
   );
 }
 
-/* ───────────── layout helpers / overrides ───────────── */
-
-function isPlainObject(obj: any) {
+/* ───────── layout helpers ───────── */
+function isPlainObject(obj) {
   return obj && typeof obj === "object" && !Array.isArray(obj);
 }
 
-function mergeLayout(base: any, override: any) {
+function mergeLayout(base, override) {
   if (!isPlainObject(base)) return base;
-  const out: any = { ...base };
+  const out = { ...base };
   if (!isPlainObject(override)) return out;
 
   for (const [k, v] of Object.entries(override)) {
@@ -403,14 +383,12 @@ function mergeLayout(base: any, override: any) {
   return out;
 }
 
-/* apply simple query-string overrides like Execx, Execy, etc. */
-function applyQueryLayoutOverrides(L: any, q: any) {
+/* optional URL overrides, eg Execx, Execy, Execw, Execmaxlines */
+function applyQueryLayoutOverrides(L, q) {
   if (!L || !q) return;
 
-  const num = (k: string, fb: number) =>
-    q[k] != null ? (Number(q[k]) || fb) : fb;
+  const num = (k, fb) => (q[k] != null ? (Number(q[k]) || fb) : fb);
 
-  // Exec summary box on p3 (Execx, Execy, Execw, Execmaxlines)
   if (L.p3 && L.p3.domDesc) {
     const box = L.p3.domDesc;
     L.p3.domDesc = {
@@ -426,12 +404,11 @@ function applyQueryLayoutOverrides(L: any, q: any) {
   }
 }
 
-/* safe page accessors */
-const pageOrNull = (pages: any[], idx0: number) => pages[idx0] ?? null;
+/* ───────── simple helpers ───────── */
+const pageOrNull = (pages, idx0) => pages[idx0] || null;
 
-/* ───────────── chart helpers ───────────── */
-
-function makeSpiderChartUrl12(bandsRaw: any) {
+/* ───────── radar chart helpers ───────── */
+function makeSpiderChartUrl12(bandsRaw) {
   const labels = [
     "C_low",
     "C_mid",
@@ -448,7 +425,6 @@ function makeSpiderChartUrl12(bandsRaw: any) {
   ];
 
   const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
-
   const maxVal = Math.max(...vals, 1);
   const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
@@ -513,36 +489,7 @@ function makeSpiderChartUrl12(bandsRaw: any) {
   );
 }
 
-async function embedRadarFromBands(
-  pdfDoc: PDFDocument,
-  page: any,
-  box: any,
-  bandsRaw: any
-) {
-  if (!pdfDoc || !page || !box || !bandsRaw) return;
-
-  const hasAny =
-    bandsRaw && Object.values(bandsRaw).some((v) => Number(v) > 0);
-  if (!hasAny) return;
-
-  const url = makeSpiderChartUrl12(bandsRaw);
-  if (!url) return;
-
-  const img = await embedRemoteImage(pdfDoc, url);
-  if (!img) return;
-
-  const H = page.getHeight();
-  const { x, y, w, h } = box;
-
-  page.drawImage(img, {
-    x,
-    y: H - y - h,
-    width: w,
-    height: h,
-  });
-}
-
-async function embedRemoteImage(pdfDoc: PDFDocument, url: string) {
+async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
   try {
     const res = await fetch(url);
@@ -566,14 +513,32 @@ async function embedRemoteImage(pdfDoc: PDFDocument, url: string) {
   }
 }
 
-/* text wrapping */
-function drawTextBox(
-  page: any,
-  font: any,
-  text: string,
-  box: any,
-  opts: any = {}
-) {
+async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
+  if (!pdfDoc || !page || !box || !bandsRaw) return;
+
+  const hasAny =
+    bandsRaw && Object.values(bandsRaw).some((v) => Number(v) > 0);
+  if (!hasAny) return;
+
+  const url = makeSpiderChartUrl12(bandsRaw);
+  if (!url) return;
+
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) return;
+
+  const H = page.getHeight();
+  const { x, y, w, h } = box;
+
+  page.drawImage(img, {
+    x,
+    y: H - y - h,
+    width: w,
+    height: h,
+  });
+}
+
+/* generic TL text drawing */
+function drawTextBox(page, font, text, box, opts = {}) {
   if (!page || !font || !box) return;
   const raw = S(text || "");
   if (!raw) return;
@@ -595,7 +560,7 @@ function drawTextBox(
   const w = N(box.w, 500);
 
   const words = txt.split(/\s+/);
-  const lines: string[] = [];
+  const lines = [];
   let current = "";
 
   const fontSize = size;
@@ -635,11 +600,10 @@ function drawTextBox(
   });
 }
 
-/* ───────────── handler ───────────── */
-export default async function handler(req: any, res: any) {
+/* ───────── main handler ───────── */
+export default async function handler(req, res) {
   try {
     const q = req.method === "POST" ? req.body || {} : req.query || {};
-
     const src = await readPayload(req);
 
     console.log("[fill-template] DEBUG_DATE_SRC", {
@@ -658,7 +622,7 @@ export default async function handler(req: any, res: any) {
       P_p1d: P["p1:d"] || null,
     });
 
-    // Compute dominant + second state keys and choose template
+    // dominant + second → combo (CT, CL, CR, TC, TR, TL, RC, RT, RL, LC, LR, LT)
     const { domKey, secondKey } = computeDomAndSecondKeys(P);
 
     let combo = "";
@@ -681,16 +645,21 @@ export default async function handler(req: any, res: any) {
       "LT",
     ]);
 
-    let tplBase: string;
+    let tplBase;
     if (validCombos.has(combo)) {
       tplBase = `CTRL_PoC_Assessment_Profile_template_${combo}.pdf`;
     } else {
-      // defensive fallback
       tplBase = "CTRL_PoC_Assessment_Profile_template_CT.pdf";
     }
 
-    const tpl = S(tplBase).replace(/[^A-Za-z0-9._-]/g, "");
+    console.log("[fill-template] TEMPLATE_SELECTED", {
+      domKey,
+      secondKey,
+      combo,
+      tplBase,
+    });
 
+    const tpl = S(tplBase).replace(/[^A-Za-z0-9._-]/g, "");
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -709,39 +678,21 @@ export default async function handler(req: any, res: any) {
     const p11 = pageOrNull(pages, 10);
     const p12 = pageOrNull(pages, 11);
 
-    // Layout anchors (tl coords in pt)
-    let L: any = {
+    /* base layout (no boxes/images on p3) */
+    let L = {
       p1: {
         name: { x: 7, y: 473, w: 500, size: 30, align: "center" },
         date: { x: 210, y: 600, w: 500, size: 25, align: "left" },
       },
       p3: {
-        domChar: {
-          x: 272,
-          y: 640,
-          w: 630,
-          size: 23,
-          align: "left",
-          maxLines: 6,
-        },
+        // single big text block for Exec + TLDRs + Tip
         domDesc: {
           x: 25,
           y: 685,
           w: 550,
           size: 18,
           align: "left",
-          maxLines: 12,
-        },
-        state: {
-          useAbsolute: true,
-          absBoxes: {
-            C: { x: 58, y: 258, w: 188, h: 156 },
-            T: { x: 299, y: 258, w: 196, h: 156 },
-            R: { x: 60, y: 433, w: 188, h: 158 },
-            L: { x: 298, y: 430, w: 195, h: 173 },
-          },
-          labelSize: 12,
-          labelOffsetTop: 18,
+          maxLines: 20,
         },
       },
       p4: {
@@ -794,24 +745,7 @@ export default async function handler(req: any, res: any) {
         maxLines: 15,
       },
       p9: {
-        ldrBoxes: [
-          { x: 25, y: 330, w: 260, h: 120 },
-          { x: 320, y: 330, w: 260, h: 120 },
-          { x: 25, y: 595, w: 260, h: 120 },
-        ],
-        bodySize: 13,
-        maxLines: 15,
-      },
-      p10: {
-        ldrBoxes: [
-          { x: 25, y: 330, w: 260, h: 120 },
-          { x: 320, y: 330, w: 260, h: 120 },
-          { x: 25, y: 595, w: 260, h: 120 },
-        ],
-        bodySize: 13,
-        maxLines: 15,
-      },
-      p11: {
+        // we reuse p11-style layout for actions
         lineGap: 6,
         itemGap: 6,
         bulletIndent: 18,
@@ -860,7 +794,7 @@ export default async function handler(req: any, res: any) {
 
     applyQueryLayoutOverrides(L, q);
 
-    /* p1 — cover (name + date) */
+    /* p1: name + date */
     if (p1 && L.p1) {
       const nameText =
         norm(P.name || (P.person && P.person.fullName) || P["p1:n"] || "");
@@ -874,10 +808,8 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    /* p3 — Exec / TLDR / tip block */
-    await (async function drawPage3() {
-      if (!p3 || !L.p3) return;
-
+    /* p3: Exec + TLDRs + Tip in one block */
+    if (p3 && L.p3 && L.p3.domDesc) {
       const exec = norm(P["p3:exec"]);
       const tldrs = [
         norm(P["p3:tldr1"]),
@@ -888,29 +820,27 @@ export default async function handler(req: any, res: any) {
       ].filter(Boolean);
       const tip = norm(P["p3:tip"]);
 
-      const blocks: string[] = [];
+      const blocks = [];
       if (exec) blocks.push(exec);
       if (tldrs.length) blocks.push(tldrs.join("\n\n"));
       if (tip) blocks.push(tip);
 
       const body = blocks.join("\n\n\n");
-      if (body && L.p3.domDesc) {
+      if (body) {
         drawTextBox(p3, font, body, L.p3.domDesc, {
           maxLines: L.p3.domDesc.maxLines,
         });
       }
-    })();
-
-    /* p4 — state / sub-state deep dive (text only) */
-    if (p4 && L.p4) {
-      if (L.p4.spider && P["p4:stateDeep"]) {
-        drawTextBox(p4, font, norm(P["p4:stateDeep"]), L.p4.spider, {
-          maxLines: L.p4.spider.maxLines,
-        });
-      }
     }
 
-    /* p5 — frequency narrative + spider chart */
+    /* p4: deep dive narrative */
+    if (p4 && L.p4 && L.p4.spider && P["p4:stateDeep"]) {
+      drawTextBox(p4, font, norm(P["p4:stateDeep"]), L.p4.spider, {
+        maxLines: L.p4.spider.maxLines,
+      });
+    }
+
+    /* p5: frequency narrative + radar chart */
     if (p5 && L.p5) {
       if (L.p5.seqpat && P["p5:freq"]) {
         drawTextBox(p5, font, norm(P["p5:freq"]), L.p5.seqpat, {
@@ -942,14 +872,14 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    /* p6 — sequence narrative */
-    if (p6 && L.p6?.themeExpl && P["p6:seq"]) {
+    /* p6: sequence */
+    if (p6 && L.p6 && L.p6.themeExpl && P["p6:seq"]) {
       drawTextBox(p6, font, norm(P["p6:seq"]), L.p6.themeExpl, {
         maxLines: L.p6.themeExpl.maxLines,
       });
     }
 
-    /* p7 — themes (top + low) */
+    /* p7: themes top + low */
     if (p7 && Array.isArray(L.p7?.colBoxes) && L.p7.colBoxes.length >= 2) {
       const top = norm(P["p7:themesTop"]);
       const low = norm(P["p7:themesLow"]);
@@ -960,13 +890,7 @@ export default async function handler(req: any, res: any) {
           p7,
           font,
           top,
-          {
-            x: box.x,
-            y: box.y,
-            w: box.w,
-            size: L.p7.bodySize || 13,
-            align: "left",
-          },
+          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
           { maxLines: L.p7.maxLines || 15 }
         );
       }
@@ -977,60 +901,48 @@ export default async function handler(req: any, res: any) {
           p7,
           font,
           low,
-          {
-            x: box.x,
-            y: box.y,
-            w: box.w,
-            size: L.p7.bodySize || 13,
-            align: "left",
-          },
+          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
           { maxLines: L.p7.maxLines || 15 }
         );
       }
     }
 
-    /* p8 — Work-with paragraphs (C/T/R/L) */
+    /* p8: work-with text C/T/R/L */
     if (p8 && Array.isArray(L.p8?.colBoxes) && L.p8.colBoxes.length >= 4) {
-      const mapIdx: any = { C: 0, T: 1, R: 2, L: 3 };
-      const txtByState: any = {
+      const mapIdx = { C: 0, T: 1, R: 2, L: 3 };
+      const txtByState = {
         C: norm(P["p8:collabC"]),
         T: norm(P["p8:collabT"]),
         R: norm(P["p8:collabR"]),
         L: norm(P["p8:collabL"]),
       };
 
-      for (const key of ["C", "T", "R", "L"]) {
+      ["C", "T", "R", "L"].forEach((key) => {
         const txt = txtByState[key];
-        if (!txt) continue;
+        if (!txt) return;
         const idx = mapIdx[key];
         const box = L.p8.colBoxes[idx];
-        if (!box) continue;
+        if (!box) return;
 
         drawTextBox(
           p8,
           font,
           txt,
-          {
-            x: box.x,
-            y: box.y,
-            w: box.w,
-            size: L.p8.bodySize || 13,
-            align: "left",
-          },
+          { x: box.x, y: box.y, w: box.w, size: L.p8.bodySize || 13, align: "left" },
           { maxLines: L.p8.maxLines || 15 }
         );
-      }
+      });
     }
 
-    /* p9 — Actions + closing note */
-    if (p9 && L.p11) {
-      const tidy = (s: any) =>
+    /* p9: actions + closing note */
+    if (p9 && L.p9) {
+      const tidy = (s) =>
         norm(String(s || ""))
           .replace(/^(?:[-–—•·]\s*)/i, "")
           .replace(/^\s*(tips?|tip)\s*:?\s*/i, "")
           .replace(/^\s*(actions?|next\s*action)\s*:?\s*/i, "")
           .trim();
-      const good = (s: string) =>
+      const good = (s) =>
         s && s.length >= 3 && !/^tips?$|^actions?$/i.test(s);
 
       const actionsPacked = [tidy(P["p9:action1"]), tidy(P["p9:action2"])]
@@ -1039,7 +951,7 @@ export default async function handler(req: any, res: any) {
 
       const closing = tidy(P["p9:closing"]);
 
-      const drawBullet = (page: any, spec: any, text: string) => {
+      const drawBullet = (page, spec, text) => {
         if (!page || !spec || !text) return;
         const bullet = `• ${text}`;
         drawTextBox(page, font, bullet, spec, {
@@ -1047,17 +959,21 @@ export default async function handler(req: any, res: any) {
         });
       };
 
-      const tipsSlots = [L.p11.tips1, L.p11.tips2];
-      const actsSlots = [L.p11.acts1, L.p11.acts2];
+      const slots = {
+        tips1: L.p9.tips1,
+        tips2: L.p9.tips2,
+        acts1: L.p9.acts1,
+        acts2: L.p9.acts2,
+      };
 
-      if (actionsPacked[0]) drawBullet(p9, actsSlots[0], actionsPacked[0]);
-      if (actionsPacked[1]) drawBullet(p9, actsSlots[1], actionsPacked[1]);
-      if (closing) drawBullet(p9, tipsSlots[0], closing);
+      if (actionsPacked[0]) drawBullet(p9, slots.acts1, actionsPacked[0]);
+      if (actionsPacked[1]) drawBullet(p9, slots.acts2, actionsPacked[1]);
+      if (closing) drawBullet(p9, slots.tips1, closing);
     }
 
-    /* footer label on p2..p12 */
+    /* footer name p2–p12 */
     const footerLabel = norm(P.name);
-    const putFooter = (page: any) => {
+    const putFooter = (page) => {
       if (!page || !footerLabel) return;
       drawTextBox(
         page,
@@ -1071,7 +987,7 @@ export default async function handler(req: any, res: any) {
 
     const bytes = await pdfDoc.save();
 
-    const safe = (value: any, fallback = "") =>
+    const safe = (value, fallback = "") =>
       String(value || fallback)
         .trim()
         .replace(/[^A-Za-z0-9]+/g, "_")
@@ -1087,7 +1003,7 @@ export default async function handler(req: any, res: any) {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
     res.send(Buffer.from(bytes));
-  } catch (err: any) {
+  } catch (err) {
     console.error("PDF handler error:", err);
     res.status(500).json({
       error: "Failed to generate PDF",
