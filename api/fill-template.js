@@ -32,7 +32,7 @@ const rectTLtoBL = (page, box, inset = 0) => {
   return { x, y, w, h };
 };
 
-/* L-shaped magenta “shadow” under a card (kept for later use if needed) */
+/* L-shaped magenta “shadow” helper (kept for future use) */
 function drawShadowL(page, absBox, strength = 1) {
   if (!page || !absBox) return;
 
@@ -76,6 +76,12 @@ function resolveDomKey(dom, domChar, domDesc) {
   return "R"; // safe default
 }
 
+/**
+ * New logic: derive dom + second from:
+ * - ctrl.summary.dominant
+ * - ctrl.summary.ctrlTotals or .mix
+ * - any counts / stateFrequency stored
+ */
 function computeDomAndSecondKeys(P) {
   const raw = (P && P.raw) || {};
   const ctrl = raw.ctrl || {};
@@ -88,26 +94,46 @@ function computeDomAndSecondKeys(P) {
   );
 
   let secondKey = "";
+
+  // 1) direct secondState if present
   if (ctrl.secondState) {
     secondKey = S(ctrl.secondState).trim().charAt(0).toUpperCase();
   } else if (P.dom2) {
     secondKey = S(P.dom2).trim().charAt(0).toUpperCase();
   }
 
+  // 2) counts / totals / mix fallback
+  const stateKeys = ["C", "T", "R", "L"];
+  let counts = {};
+
   if (!["C", "T", "R", "L"].includes(secondKey)) {
-    const counts =
+    counts =
       P.counts ||
       ctrl.counts ||
       summary.counts ||
       summary.stateFrequency ||
+      summary.ctrlTotals ||
+      summary.mix ||
       {};
-    const keys = ["C", "T", "R", "L"];
-    const ranked = keys
+    const ranked = stateKeys
       .map((k) => ({ k, n: Number(counts[k] || 0) || 0 }))
       .sort((a, b) => b.n - a.n);
+
     const bestNonDom = ranked.find((r) => r.k !== domKey && r.n > 0);
     if (bestNonDom) secondKey = bestNonDom.k;
   }
+
+  // 3) last-resort default if still nothing useful
+  if (!["C", "T", "R", "L"].includes(secondKey)) {
+    const fallbackOrder = ["C", "T", "R", "L"];
+    secondKey = fallbackOrder.find((k) => k !== domKey) || "";
+  }
+
+  console.log("[fill-template] DOM_SECOND_KEYS", {
+    domKey,
+    secondKey,
+    counts,
+  });
 
   return { domKey, secondKey };
 }
@@ -224,10 +250,13 @@ function normaliseInput(d = {}) {
 
   const dom2State = ctrl.secondState || d.dom2 || d["p3:dom2"] || "";
 
+  // NEW: include ctrlTotals / mix in counts
   const counts =
     ctrl.counts ||
     summary.counts ||
     summary.stateFrequency ||
+    summary.ctrlTotals ||
+    summary.mix ||
     d.counts ||
     d["p3:counts"] ||
     {};
@@ -649,7 +678,15 @@ export default async function handler(req, res) {
     if (validCombos.has(combo)) {
       tplBase = `CTRL_PoC_Assessment_Profile_template_${combo}.pdf`;
     } else {
-      tplBase = "CTRL_PoC_Assessment_Profile_template_CT.pdf";
+      // last-resort fallback: keep dom, pick a simple neighbour
+      const fallbackOrder = ["C", "T", "R", "L"];
+      const fallbackSecond =
+        secondKey && secondKey !== domKey
+          ? secondKey
+          : fallbackOrder.find((k) => k !== domKey) || "T";
+      const fbCombo =
+        domKey && fallbackSecond ? `${domKey}${fallbackSecond}` : "CT";
+      tplBase = `CTRL_PoC_Assessment_Profile_template_${fbCombo}.pdf`;
     }
 
     console.log("[fill-template] TEMPLATE_SELECTED", {
@@ -745,7 +782,6 @@ export default async function handler(req, res) {
         maxLines: 15,
       },
       p9: {
-        // we reuse p11-style layout for actions
         lineGap: 6,
         itemGap: 6,
         bulletIndent: 18,
