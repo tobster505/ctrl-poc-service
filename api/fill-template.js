@@ -525,6 +525,16 @@ export default async function handler(req, res) {
 
     const pages = pdfDoc.getPages();
 
+    // --- Header name on pages 2–10 (index 1+) ---
+    const headerName = norm(P["p1:n"]);
+    if (headerName) {
+      for (let i = 1; i < pages.length; i++) {
+        const pageKey = `p${i + 1}`; // page index 1 => p2
+        const box = L?.[pageKey]?.hdrName;
+        if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: box.maxLines || 1 });
+      }
+    }
+
     // SAFETY: do not assume page count
     const p1 = pages[0] || null;
     const p3 = pages[2] || null;
@@ -573,15 +583,26 @@ export default async function handler(req, res) {
       if (L.p5.chart) {
         const bandsObj = P.bands || {};
         const bandKeys = (bandsObj && typeof bandsObj === "object") ? Object.keys(bandsObj) : [];
-        const vals = ["C_low","C_mid","C_high","T_low","T_mid","T_high","R_low","R_mid","R_high","L_low","L_mid","L_high"]
-          .map((k) => Number(bandsObj?.[k] || 0));
+        const labels = ["C_low","C_mid","C_high","T_low","T_mid","T_high","R_low","R_mid","R_high","L_low","L_mid","L_high"];
+        const vals = labels.map((k) => Number(bandsObj?.[k] || 0));
         const hasAny = vals.some((v) => v > 0);
         const maxVal = Math.max(...vals, 0);
+        const sumVal = vals.reduce((a, b) => a + b, 0);
 
-        // NOTE: debug flag is already handled above via early JSON return.
-        // This block remains as runtime logging support if you later remove the early return.
-        // (No behaviour change in current flow.)
-        // If you want logging here, you can pass debug=true via code.
+        // 2nd debug line regarding the chart (runtime logging)
+        console.log("[fill-template] chart:bandsMeta", {
+          keys: bandKeys.length,
+          sampleKeys: bandKeys.slice(0, 12),
+          hasAny,
+          maxVal,
+          sum: sumVal,
+          first6: vals.slice(0, 6),
+          last6: vals.slice(6),
+          box: L.p5.chart,
+          pageH: p5.getHeight(),
+          pageW: p5.getWidth(),
+        });
+
         try {
           await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bandsObj, false);
         } catch (e) {
