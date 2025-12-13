@@ -4,7 +4,6 @@
  */
 export const config = { runtime: "nodejs" };
 
-/* ───────────── imports ───────────── */
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -14,22 +13,18 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-const norm = (s) =>
-  S(s)
-    .replace(/\s+/g, " ")
-    .trim();
+const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 
+/** TLDR → main → action packer */
 function packSection(tldr, main, action) {
   const blocks = [];
   const T = norm(tldr);
   const M = norm(main);
   const A = norm(action);
-
-  if (T) blocks.push(T);   // TLDR FIRST
-  if (M) blocks.push(M);   // then main
-  if (A) blocks.push(A);   // then action
-
-  return blocks.filter(Boolean).join("\n\n\n");
+  if (T) blocks.push(T);
+  if (M) blocks.push(M);
+  if (A) blocks.push(A);
+  return blocks.join("\n\n\n");
 }
 
 /* brand colour */
@@ -45,68 +40,49 @@ const rectTLtoBL = (page, box, inset = 0) => {
   return { x, y, w, h };
 };
 
-/* L-shaped magenta “shadow” helper (kept for future use) */
-function drawShadowL(page, absBox, strength = 1) {
-  if (!page || !absBox) return;
-
-  const pageH = page.getHeight();
-  const x = N(absBox.x);
-  const y = pageH - N(absBox.y) - N(absBox.h);
-  const w = N(absBox.w);
-  const h = N(absBox.h);
-
-  const thick = Math.max(2, Math.round(6 * strength));
-  const alpha = clamp(0.25 * strength, 0.08, 0.35);
-
-  // left bar
-  page.drawRectangle({
-    x: x - thick,
-    y: y - thick,
-    width: thick,
-    height: h + thick * 2,
-    color: rgb(BRAND.r, BRAND.g, BRAND.b),
-    opacity: alpha,
-  });
-
-  // bottom bar
-  page.drawRectangle({
-    x: x - thick,
-    y: y - thick,
-    width: w + thick * 2,
-    height: thick,
-    color: rgb(BRAND.r, BRAND.g, BRAND.b),
-    opacity: alpha,
-  });
-}
-
 /* ───────── text box helper ───────── */
 function drawTextBox(page, font, text, box, opts = {}) {
+  if (!page || !font || !box) return;
+  const t0 = norm(text);
+  if (!t0) return;
+
   const { x, y, w, h } = rectTLtoBL(page, box, 0);
   const size = N(box.size || opts.size || 12);
   const lineHeight = N(opts.lineHeight || Math.round(size * 1.3));
   const maxLines = N(opts.maxLines || box.maxLines || 999);
   const align = opts.align || box.align || "left";
 
-  const words = S(text).split(" ");
+  // Split words but keep intentional newlines by using a sentinel
+  const paragraphs = String(t0).split("\n");
   const lines = [];
-  let line = "";
 
-  const maxWidth = w;
-  for (const word of words) {
-    const test = line ? line + " " + word : word;
-    const width = font.widthOfTextAtSize(test, size);
-    if (width <= maxWidth) {
-      line = test;
-    } else {
-      if (line) lines.push(line);
-      line = word;
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    let line = "";
+
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      const width = font.widthOfTextAtSize(test, size);
+      if (width <= w) {
+        line = test;
+      } else {
+        if (line) lines.push(line);
+        line = word;
+      }
+      if (lines.length >= maxLines) break;
     }
+    if (lines.length >= maxLines) break;
+    if (line) lines.push(line);
+
+    // paragraph gap (blank line) if room
+    if (lines.length < maxLines) lines.push("");
   }
-  if (line) lines.push(line);
+
+  // Remove trailing blank line
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
 
   const clipped = lines.slice(0, maxLines);
-  const totalH = clipped.length * lineHeight;
-  const startY = y + h - lineHeight; // top line inside box
+  const startY = y + h - lineHeight;
 
   for (let i = 0; i < clipped.length; i++) {
     const t = clipped[i];
@@ -120,33 +96,256 @@ function drawTextBox(page, font, text, box, opts = {}) {
   }
 }
 
-/* ───────── quick “radar chart” embed helper ───────── */
-async function embedRadarFromBands(pdfDoc, page, box, bands = {}) {
-  // NOTE: This function assumes embed of a pre-rendered chart image exists elsewhere in your code.
-  // It is left unchanged intentionally.
+/* ───────── template loader ───────── */
+async function loadTemplateBytesLocal(fname) {
+  if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
+
+  const __file = fileURLToPath(import.meta.url);
+  const __dir = path.dirname(__file);
+
+  // Vercel serverless root typically /var/task
+  const candidates = [
+    path.join(process.cwd(), "public", fname),
+    path.join(__dir, "..", "public", fname),
+    path.join(__dir, "public", fname),
+    path.join(__dir, fname),
+  ];
+
+  let lastErr;
+  for (const pth of candidates) {
+    try {
+      return await fs.readFile(pth);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw new Error(
+    `Template not found: ${fname}. Tried: ${candidates.join(" | ")}. Last: ${lastErr?.message || "no detail"}`
+  );
 }
 
-/* ───────── default layout (fallback) ───────── */
+/* ───────── payload parsing (GET ?data=... or POST JSON) ───────── */
+async function readPayload(req) {
+  if (req.method === "POST") {
+    const chunks = [];
+    for await (const ch of req) chunks.push(ch);
+    const raw = Buffer.concat(chunks).toString("utf8") || "{}";
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return {};
+    }
+  }
+
+  const url = new URL(req.url, "http://localhost");
+  const dataB64 = url.searchParams.get("data") || "";
+  if (!dataB64) return {};
+
+  try {
+    const raw = Buffer.from(dataB64, "base64").toString("utf8");
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+/* ───────── dom/second detection ───────── */
+function resolveStateKey(any) {
+  const s = S(any).trim().toUpperCase();
+  const c = s.charAt(0);
+  if (["C", "T", "R", "L"].includes(c)) return c;
+
+  const low = S(any).toLowerCase();
+  if (low.includes("concealed")) return "C";
+  if (low.includes("triggered")) return "T";
+  if (low.includes("regulated")) return "R";
+  if (low.includes("lead")) return "L";
+
+  return null;
+}
+
+function computeDomAndSecondKeys(P) {
+  const raw = P.raw || {};
+  const ctrl = raw.ctrl || {};
+  const summary = ctrl.summary || {};
+
+  const domKey =
+    resolveStateKey(P["p3:dom"]) ||
+    resolveStateKey(raw.domState) ||
+    resolveStateKey(summary.domState) ||
+    resolveStateKey(ctrl.domState) ||
+    "R";
+
+  // Try totals if present
+  const totals =
+    summary.ctrlTotals ||
+    summary.totals ||
+    summary.mix ||
+    ctrl.ctrlTotals ||
+    ctrl.totals ||
+    ctrl.mix ||
+    raw.ctrlTotals ||
+    raw.totals ||
+    raw.mix ||
+    {};
+
+  const score = { C: 0, T: 0, R: 0, L: 0 };
+
+  const addTotals = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+    score.C += Number(obj.C ?? obj.concealed ?? obj.c ?? 0) || 0;
+    score.T += Number(obj.T ?? obj.triggered ?? obj.t ?? 0) || 0;
+    score.R += Number(obj.R ?? obj.regulated ?? obj.r ?? 0) || 0;
+    score.L += Number(obj.L ?? obj.lead ?? obj.l ?? 0) || 0;
+  };
+
+  addTotals(totals);
+
+  const ordered = ["C", "T", "R", "L"]
+    .filter((k) => k !== domKey)
+    .map((k) => [k, score[k]])
+    .sort((a, b) => b[1] - a[1]);
+
+  const secondKey = ordered[0]?.[0] || (domKey === "C" ? "T" : "C");
+  return { domKey, secondKey };
+}
+
+/* ───────── radar chart embed (QuickChart) ───────── */
+function makeSpiderChartUrl12(bandsRaw) {
+  const labels = [
+    "C_low","C_mid","C_high","T_low","T_mid","T_high",
+    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  ];
+
+  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
+  const maxVal = Math.max(...vals, 1);
+  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const cfg = {
+    type: "radar",
+    data: {
+      labels,
+      datasets: [{
+        label: "",
+        data: scaled,
+        fill: true,
+        borderWidth: 0,
+        pointRadius: 0,
+        backgroundColor: "rgba(184, 15, 112, 0.35)",
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        r: {
+          min: 0, max: 1,
+          ticks: { display: false },
+          grid: { display: false },
+          angleLines: { display: false },
+          pointLabels: { display: false },
+        },
+      },
+    },
+  };
+
+  const enc = encodeURIComponent(JSON.stringify(cfg));
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+}
+
+async function embedRemoteImage(pdfDoc, url) {
+  if (!url) return null;
+  if (typeof fetch !== "function") {
+    throw new Error("fetch is not available in this runtime. Ensure Node 18+ on Vercel.");
+  }
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch chart: ${res.status} ${res.statusText}`);
+
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const sig = String.fromCharCode(buf[0], buf[1], buf[2], buf[3] || 0);
+
+  if (sig.startsWith("\x89PNG")) return await pdfDoc.embedPng(buf);
+  if (sig.startsWith("\xff\xd8")) return await pdfDoc.embedJpg(buf);
+
+  // fallback
+  try {
+    return await pdfDoc.embedPng(buf);
+  } catch {
+    return await pdfDoc.embedJpg(buf);
+  }
+}
+
+async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
+  if (!pdfDoc || !page || !box || !bandsRaw) return;
+
+  const hasAny = Object.values(bandsRaw).some((v) => Number(v) > 0);
+  if (!hasAny) return;
+
+  const url = makeSpiderChartUrl12(bandsRaw);
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) return;
+
+  const H = page.getHeight();
+  const { x, y, w, h } = box;
+
+  // wipe artefact behind chart if needed
+  page.drawRectangle({
+    x,
+    y: H - y - h,
+    width: w,
+    height: h,
+    color: rgb(1, 1, 1),
+    opacity: 0, // transparent (acts as a no-op in most PDFs but harmless)
+  });
+
+  page.drawImage(img, { x, y: H - y - h, width: w, height: h });
+}
+
+/* ───────── default layout (complete) ───────── */
 const DEFAULT_LAYOUT = {
-  // (layout left unchanged intentionally)
+  pages: {
+    p1: {
+      name: { x: 7, y: 473, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
+      date: { x: 210, y: 600, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
+    },
+    p3: {
+      domDesc: { x: 25, y: 685, w: 550, h: 420, size: 18, align: "left", maxLines: 20 },
+    },
+    p4: {
+      spider: { x: 25, y: 347, w: 550, h: 420, size: 18, align: "left", maxLines: 20 },
+    },
+    p5: {
+      seqpat: { x: 25, y: 347, w: 550, h: 420, size: 18, align: "left", maxLines: 20 },
+      chart: { x: 48, y: 462, w: 500, h: 300 },
+    },
+    p6: {
+      themeExpl: { x: 25, y: 347, w: 550, h: 420, size: 18, align: "left", maxLines: 20 },
+    },
+  },
 };
 
-/* ───────── layout normaliser ───────── */
+/* deep merge override into default */
 function mergeLayout(overrides = null) {
   const base = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
   if (!overrides || typeof overrides !== "object") return base;
 
-  // shallow merge pages
-  for (const k of Object.keys(overrides)) {
-    if (k === "pages" && overrides.pages && base.pages) {
-      for (const pk of Object.keys(overrides.pages)) {
-        base.pages[pk] = { ...(base.pages[pk] || {}), ...(overrides.pages[pk] || {}) };
-      }
-    } else {
-      base[k] = overrides[k];
+  const out = JSON.parse(JSON.stringify(base));
+  const ov = overrides;
+
+  if (ov.pages && typeof ov.pages === "object") {
+    out.pages = out.pages || {};
+    for (const pk of Object.keys(ov.pages)) {
+      out.pages[pk] = { ...(out.pages[pk] || {}), ...(ov.pages[pk] || {}) };
     }
   }
-  return base;
+
+  // allow top-level overrides if you ever add them
+  for (const k of Object.keys(ov)) {
+    if (k === "pages") continue;
+    out[k] = ov[k];
+  }
+
+  return out;
 }
 
 /* ───────── input normaliser ───────── */
@@ -177,8 +376,8 @@ function normaliseInput(d = {}) {
 
   const domState =
     d.domState ||
-    (summary && summary.domState) ||
-    (ctrl && ctrl.domState) ||
+    summary.domState ||
+    ctrl.domState ||
     d["p3:dom"] ||
     "";
 
@@ -187,28 +386,18 @@ function normaliseInput(d = {}) {
     (Array.isArray(d.tldr) && d.tldr) ||
     [];
 
-  const actsList =
-    (Array.isArray(actionsObj) && actionsObj) ||
-    actionsObj.list ||
-    d.actions ||
-    [];
+  const chartUrl = d.chartUrl || chart.url || d["p5:chart"] || "";
 
-  const chartUrl =
-    d.chartUrl ||
-    chart.url ||
-    d["p5:chart"] ||
-    "";
-
-  const out = {
+  return {
     raw: d,
-    identity: identity,
-    ctrl: ctrl,
-    summary: summary,
-    text: text,
-    workWith: workWith,
-    actions: actsList,
+    identity,
+    ctrl,
+    summary,
+    text,
+    workWith,
     chartUrl,
     layout: d.layout || null,
+
     bands: ctrl.bands || summary.bands || d.bands || {},
 
     "p1:n": d["p1:n"] || nameCand || "",
@@ -235,171 +424,82 @@ function normaliseInput(d = {}) {
     "p6:seq": d["p6:seq"] || text.sequence || "",
     "p6:tldr": d["p6:tldr"] || text.p6tldr || "",
     "p6:action": d["p6:action"] || text.p6action || "",
-
-    "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
-    "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
-
-    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
-    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
-    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
-    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
-
-    "p9:tips1": d["p9:tips1"] || text.tips1 || "",
-    "p9:acts1": d["p9:acts1"] || text.actions1 || "",
-    "p9:acts2": d["p9:acts2"] || text.actions2 || "",
   };
-
-  return out;
 }
 
 /* ───────── main handler ───────── */
 export default async function handler(req, res) {
   try {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-
-    const url = new URL(req.url, "http://localhost");
-    const dataB64 = url.searchParams.get("data") || "";
-
-    let payload = {};
-    if (dataB64) {
-      try {
-        const raw = Buffer.from(dataB64, "base64").toString("utf8");
-        payload = JSON.parse(raw);
-      } catch (e) {
-        payload = {};
-      }
-    }
-
+    const payload = await readPayload(req);
     const P = normaliseInput(payload);
 
-    const layout = mergeLayout(P.layout);
+    // Select correct template among the 12
+    const { domKey, secondKey } = computeDomAndSecondKeys(P);
+    const combo = `${domKey}${secondKey}`;
 
-    // load PDF template
-    const pdfPath = path.join(__dirname, "..", "public", "CTRL_PoC_Assessment_Profile_template.pdf");
-    const pdfBytes = await fs.readFile(pdfPath);
+    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
+    const safeCombo = validCombos.has(combo) ? combo : "CT";
+    const tpl = `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`;
 
+    // Load PDF
+    const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
+    // Layout
+    const layout = mergeLayout(P.layout);
+    const L = layout.pages || DEFAULT_LAYOUT.pages;
+
     const pages = pdfDoc.getPages();
     const p1 = pages[0];
-    const p2 = pages[1];
     const p3 = pages[2];
     const p4 = pages[3];
     const p5 = pages[4];
     const p6 = pages[5];
-    const p7 = pages[6];
-    const p8 = pages[7];
-    const p9 = pages[8];
-
-    const L = (layout && layout.pages) || {};
 
     /* p1: name + date */
     if (p1 && L.p1) {
-      if (L.p1.name && P["p1:n"]) {
-        drawTextBox(p1, font, norm(P["p1:n"]), L.p1.name, { maxLines: L.p1.name.maxLines });
-      }
-      if (L.p1.date && P["p1:d"]) {
-        drawTextBox(p1, font, norm(P["p1:d"]), L.p1.date, { maxLines: L.p1.date.maxLines });
-      }
+      if (L.p1.name && P["p1:n"]) drawTextBox(p1, font, P["p1:n"], L.p1.name, { maxLines: 1 });
+      if (L.p1.date && P["p1:d"]) drawTextBox(p1, font, P["p1:d"], L.p1.date, { maxLines: 1 });
     }
 
-    /* p2: (left unchanged intentionally) */
-
-    /* p3: Exec + TLDRs + Tip in one block */
-    if (p3 && L.p3 && L.p3.domDesc) {
+    /* p3: TLDR → main → action (your existing pattern) */
+    if (p3 && L.p3?.domDesc) {
       const exec = norm(P["p3:exec"]);
-      const tldrs = [
-        norm(P["p3:tldr1"]),
-        norm(P["p3:tldr2"]),
-        norm(P["p3:tldr3"]),
-        norm(P["p3:tldr4"]),
-        norm(P["p3:tldr5"]),
-      ].filter(Boolean);
+      const tldrs = [P["p3:tldr1"],P["p3:tldr2"],P["p3:tldr3"],P["p3:tldr4"],P["p3:tldr5"]]
+        .map(norm)
+        .filter(Boolean);
       const tip = norm(P["p3:tip"]);
 
       const blocks = [];
-      if (tldrs.length) blocks.push(tldrs.join("\n\n")); // TLDR FIRST
+      if (tldrs.length) blocks.push(tldrs.join("\n\n"));
       if (exec) blocks.push(exec);
       if (tip) blocks.push(tip);
 
-      const body = blocks.filter(Boolean).join("\n\n\n");
-      if (body) {
-        drawTextBox(p3, font, body, L.p3.domDesc, {
-          maxLines: L.p3.domDesc.maxLines,
-        });
-      }
+      drawTextBox(p3, font, blocks.join("\n\n\n"), L.p3.domDesc, { maxLines: L.p3.domDesc.maxLines });
     }
 
-    /* p4: deep dive narrative */
-    if (p4 && L.p4 && L.p4.spider) {
+    /* p4: TLDR → main → action */
+    if (p4 && L.p4?.spider) {
       const body = packSection(P["p4:tldr"], P["p4:stateDeep"], P["p4:action"]);
-      if (body) {
-        drawTextBox(p4, font, body, L.p4.spider, {
-          maxLines: L.p4.spider.maxLines,
-        });
-      }
+      drawTextBox(p4, font, body, L.p4.spider, { maxLines: L.p4.spider.maxLines });
     }
 
-    /* p5: frequency narrative + radar chart */
+    /* p5: TLDR → main → action + chart */
     if (p5 && L.p5) {
       if (L.p5.seqpat) {
         const body = packSection(P["p5:tldr"], P["p5:freq"], P["p5:action"]);
-        if (body) {
-          drawTextBox(p5, font, body, L.p5.seqpat, {
-            maxLines: L.p5.seqpat.maxLines,
-          });
-        }
+        drawTextBox(p5, font, body, L.p5.seqpat, { maxLines: L.p5.seqpat.maxLines });
       }
-
       if (L.p5.chart) {
-        const bands =
-          P.bands ||
-          (P.raw &&
-            P.raw.ctrl &&
-            (P.raw.ctrl.bands ||
-              (P.raw.ctrl.summary && P.raw.ctrl.summary.bands))) ||
-          (P.raw && P.raw.bands) ||
-          {};
-
-        const H = p5.getHeight();
-        const { x, y, w, h } = L.p5.chart;
-        p5.drawRectangle({
-          x,
-          y: H - y - h,
-          width: w,
-          height: h,
-          color: rgb(1, 1, 1),
-        });
-
-        await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bands);
+        await embedRadarFromBands(pdfDoc, p5, L.p5.chart, P.bands || {});
       }
     }
 
-    /* p6: sequence */
-    if (p6 && L.p6 && L.p6.themeExpl) {
+    /* p6: TLDR → main → action */
+    if (p6 && L.p6?.themeExpl) {
       const body = packSection(P["p6:tldr"], P["p6:seq"], P["p6:action"]);
-      if (body) {
-        drawTextBox(p6, font, body, L.p6.themeExpl, {
-          maxLines: L.p6.themeExpl.maxLines,
-        });
-      }
-    }
-
-    /* p7: themes top + low */
-    if (p7 && Array.isArray(L.p7?.boxes)) {
-      // (left unchanged intentionally)
-    }
-
-    /* p8: collaboration */
-    if (p8 && L.p8) {
-      // (left unchanged intentionally)
-    }
-
-    /* p9: tips + actions */
-    if (p9 && L.p9) {
-      // (left unchanged intentionally)
+      drawTextBox(p6, font, body, L.p6.themeExpl, { maxLines: L.p6.themeExpl.maxLines });
     }
 
     const outBytes = await pdfDoc.save();
@@ -408,9 +508,12 @@ export default async function handler(req, res) {
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
+    // Make sure you get REAL error details, not generic Vercel “crashed”
+    console.error("[fill-template] CRASH", err);
     res.status(500).json({
       ok: false,
-      error: String(err && err.message ? err.message : err),
+      error: err?.message || String(err),
+      stack: err?.stack || null,
     });
   }
 }
