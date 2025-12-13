@@ -15,6 +15,11 @@ const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 
+function safeJson(obj) {
+  try { return JSON.parse(JSON.stringify(obj)); }
+  catch { return { _error: "Could not serialise debug object" }; }
+}
+
 /** TLDR → main → action packer */
 function packSection(tldr, main, action) {
   const blocks = [];
@@ -432,6 +437,29 @@ export default async function handler(req, res) {
 
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
+
+        if (debug) {
+      return res.status(200).json({
+        ok: true,
+        where: "fill-template:after_normaliseInput",
+        gotDataParam: url.searchParams.has("data"),
+        payloadTopKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 25) : [],
+        lengths: {
+          p7themesTop: (P["p7:themesTop"] || "").length,
+          p7themesLow: (P["p7:themesLow"] || "").length,
+          p8c: (P["p8:collabC"] || "").length,
+          p8t: (P["p8:collabT"] || "").length,
+          p8r: (P["p8:collabR"] || "").length,
+          p8l: (P["p8:collabL"] || "").length,
+          bandsKeys: Object.keys(P.bands || {}).length,
+        },
+        samples: {
+          themesTop: (P["p7:themesTop"] || "").slice(0, 140),
+          collabC: (P["p8:collabC"] || "").slice(0, 140),
+        },
+        domSecond: safeJson(computeDomAndSecondKeys(P)),
+      });
+    }
 
     const { domKey, secondKey } = computeDomAndSecondKeys(P);
     const combo = `${domKey}${secondKey}`;
