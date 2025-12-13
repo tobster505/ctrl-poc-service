@@ -279,8 +279,45 @@ async function embedRemoteImage(pdfDoc, url) {
   }
 }
 
-async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
+async function embedRadarFromBands(pdfDoc, page, box, bandsRaw, debug = false) {
   if (!pdfDoc || !page || !box || !bandsRaw) return;
+
+    if (debug) {
+    console.log("[fill-template] chart:enter", {
+      hasBandsRaw: !!bandsRaw,
+      keys: bandsRaw && typeof bandsRaw === "object" ? Object.keys(bandsRaw).length : 0,
+      box,
+    });
+  }
+
+  const hasAny = Object.values(bandsRaw).some((v) => Number(v) > 0);
+  if (!hasAny) {
+    if (debug) console.log("[fill-template] chart:exit:no_values");
+    return;
+  }
+
+  const url = makeSpiderChartUrl12(bandsRaw);
+  if (debug) console.log("[fill-template] chart:url", { len: url.length, preview: url.slice(0, 120) });
+
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) {
+    if (debug) console.log("[fill-template] chart:exit:no_img");
+    return;
+  }
+
+  const H = page.getHeight();
+  const { x, y, w, h } = box;
+
+  if (debug) console.log("[fill-template] chart:draw", {
+    x, y, w, h,
+    yBL: H - y - h,
+    pageH: H
+  });
+
+  page.drawImage(img, { x, y: H - y - h, width: w, height: h });
+
+  if (debug) console.log("[fill-template] chart:done");
+}
 
   const hasAny = Object.values(bandsRaw).some((v) => Number(v) > 0);
   if (!hasAny) return;
@@ -594,14 +631,37 @@ export default async function handler(req, res) {
         const body = packSection(P["p5:tldr"], P["p5:freq"], P["p5:action"]);
         drawTextBox(p5, font, body, L.p5.seqpat, { maxLines: L.p5.seqpat.maxLines });
       }
-      if (L.p5.chart) {
-        try {
-          await embedRadarFromBands(pdfDoc, p5, L.p5.chart, P.bands || {});
-        } catch (e) {
-          console.warn("[fill-template] Radar chart skipped:", e?.message || String(e));
-        }
-      }
-    }
+if (L.p5.chart) {
+  const bandsObj = P.bands || {};
+  const bandKeys = (bandsObj && typeof bandsObj === "object") ? Object.keys(bandsObj) : [];
+  const vals = ["C_low","C_mid","C_high","T_low","T_mid","T_high","R_low","R_mid","R_high","L_low","L_mid","L_high"]
+    .map((k) => Number(bandsObj?.[k] || 0));
+  const hasAny = vals.some((v) => v > 0);
+  const maxVal = Math.max(...vals, 0);
+
+  if (debug) {
+    console.log("[fill-template] chart:bandsMeta", {
+      keys: bandKeys.length,
+      sampleKeys: bandKeys.slice(0, 12),
+      hasAny,
+      maxVal,
+      sum: vals.reduce((a,b)=>a+b,0),
+      first6: vals.slice(0, 6),
+      last6: vals.slice(6),
+      box: L.p5.chart,
+      pageH: p5.getHeight(),
+      pageW: p5.getWidth(),
+    });
+  }
+
+  try {
+    await embedRadarFromBands(pdfDoc, p5, L.p5.chart, P.bands || {}, debug);
+    if (debug) console.log("[fill-template] chart:embed OK");
+  } catch (e) {
+    console.warn("[fill-template] Radar chart skipped:", e?.message || String(e));
+  }
+}
+
 
     /* p6: TLDR → main → action */
     if (p6 && L.p6?.themeExpl) {
