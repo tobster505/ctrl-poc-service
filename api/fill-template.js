@@ -588,3 +588,13 @@ export default async function handler(req, res) {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(Buffer.from(outBytes));
+  } catch (err) {
+    console.error("[fill-template] CRASH", err);
+    res.status(500).json({
+      ok: false,
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
+  }
+}
+
