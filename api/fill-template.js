@@ -1,4 +1,3 @@
-/**
  * CTRL PoC Export Service · fill-template (Starter/PoC flow)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  */
@@ -18,19 +17,6 @@ const norm = (s) =>
   S(s)
     .replace(/\s+/g, " ")
     .trim();
-
-function packSection(tldr, main, action) {
-  const blocks = [];
-  const T = norm(tldr);
-  const M = norm(main);
-  const A = norm(action);
-
-  if (T) blocks.push(T); // TLDR first
-  if (M) blocks.push(M); // then main
-  if (A) blocks.push(A); // then action
-
-  return blocks.filter(Boolean).join("\n\n\n");
-}
 
 /* brand colour */
 const BRAND = { r: 0.72, g: 0.06, b: 0.44 };
@@ -100,53 +86,251 @@ function computeDomAndSecondKeys(P) {
   const ctrl = raw.ctrl || {};
   const summary = ctrl.summary || {};
 
-  // 1) direct
-  const domKey = resolveDomKey(P["p3:dom"], raw.domchar, raw.domdesc);
+  const domKey = resolveDomKey(
+    P["p3:dom"] || P.dom || ctrl.dominant || ctrl.dominantState,
+    P.domChar,
+    P.domDesc
+  );
 
-  // 2) try structured totals
-  const totals =
-    summary.ctrlTotals ||
-    summary.totals ||
-    summary.mix ||
-    ctrl.ctrlTotals ||
-    ctrl.totals ||
-    ctrl.mix ||
-    raw.ctrlTotals ||
-    raw.totals ||
-    raw.mix ||
-    null;
+  let secondKey = "";
 
-  const fallbackCounts =
-    (summary.counts && typeof summary.counts === "object" && summary.counts) ||
-    (ctrl.counts && typeof ctrl.counts === "object" && ctrl.counts) ||
-    (raw.counts && typeof raw.counts === "object" && raw.counts) ||
-    null;
-
-  const score = { C: 0, T: 0, R: 0, L: 0 };
-
-  function addObj(obj) {
-    if (!obj || typeof obj !== "object") return;
-    for (const k of ["C", "T", "R", "L"]) {
-      const v =
-        obj[k] ??
-        obj[k.toLowerCase()] ??
-        obj[{ C: "concealed", T: "triggered", R: "regulated", L: "lead" }[k]];
-      if (v != null) score[k] += Number(v) || 0;
-    }
+  // 1) direct secondState if present
+  if (ctrl.secondState) {
+    secondKey = S(ctrl.secondState).trim().charAt(0).toUpperCase();
+  } else if (P.dom2) {
+    secondKey = S(P.dom2).trim().charAt(0).toUpperCase();
   }
 
-  addObj(totals);
-  addObj(fallbackCounts);
+  // 2) counts / totals / mix fallback
+  const stateKeys = ["C", "T", "R", "L"];
+  let counts = {};
 
-  // 3) second-best (excluding dom)
-  const ordered = ["C", "T", "R", "L"]
-    .filter((k) => k !== domKey)
-    .map((k) => [k, score[k]])
-    .sort((a, b) => b[1] - a[1]);
+  if (!["C", "T", "R", "L"].includes(secondKey)) {
+    counts =
+      P.counts ||
+      ctrl.counts ||
+      summary.counts ||
+      summary.stateFrequency ||
+      summary.ctrlTotals ||
+      summary.mix ||
+      {};
+    const ranked = stateKeys
+      .map((k) => ({ k, n: Number(counts[k] || 0) || 0 }))
+      .sort((a, b) => b.n - a.n);
 
-  const secondKey = ordered[0] ? ordered[0][0] : null;
+    const bestNonDom = ranked.find((r) => r.k !== domKey && r.n > 0);
+    if (bestNonDom) secondKey = bestNonDom.k;
+  }
 
-  return { domKey: domKey || null, secondKey };
+  // 3) last-resort default if still nothing useful
+  if (!["C", "T", "R", "L"].includes(secondKey)) {
+    const fallbackOrder = ["C", "T", "R", "L"];
+    secondKey = fallbackOrder.find((k) => k !== domKey) || "";
+  }
+
+  console.log("[fill-template] DOM_SECOND_KEYS", {
+    domKey,
+    secondKey,
+    counts,
+  });
+
+  return { domKey, secondKey };
+}
+
+/* ───────── payload parsing ───────── */
+function parseDataParam(raw) {
+  if (!raw) return {};
+
+  const enc = String(raw);
+
+  // 1) try as plain JSON
+  try {
+    const obj = JSON.parse(enc);
+    console.log("[fill-template] parseDataParam: parsed direct JSON");
+    return obj;
+  } catch {
+    // ignore
+  }
+
+  // 2) decodeURIComponent then JSON
+  let decoded = enc;
+  try {
+    decoded = decodeURIComponent(enc);
+  } catch {
+    // ignore
+  }
+  try {
+    const obj = JSON.parse(decoded);
+    console.log("[fill-template] parseDataParam: parsed decoded JSON");
+    return obj;
+  } catch {
+    // ignore
+  }
+
+  // 3) base64 → JSON
+  try {
+    let b64 = decoded.replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    const txt = Buffer.from(b64, "base64").toString("utf8");
+    const obj = JSON.parse(txt);
+    console.log("[fill-template] parseDataParam: parsed base64 JSON");
+    return obj;
+  } catch {
+    console.warn("[fill-template] parseDataParam: failed to parse payload");
+    return {};
+  }
+}
+
+async function readPayload(req) {
+  if (req.method === "POST") {
+    const body = req.body || {};
+    if (body.data) return parseDataParam(body.data);
+    if (typeof body === "object" && !Array.isArray(body)) return body;
+    return {};
+  }
+
+  const q = req.query || {};
+  if (q.data) return parseDataParam(q.data);
+  return {};
+}
+
+/* ───────── helpers for text / lists ───────── */
+function splitToList(s) {
+  const txt = S(s || "");
+  if (!txt) return [];
+  return txt
+    .split(/\r?\n/)
+    .map((ln) => ln.trim())
+    .filter(Boolean);
+}
+
+function cleanBullet(s) {
+  return S(s || "")
+    .replace(/^[\-–—•·]\s*/i, "")
+    .trim();
+}
+
+/* ───────── normalise INPUT into P ───────── */
+function normaliseInput(d = {}) {
+  const identity = d.identity || {};
+  const ctrl = d.ctrl || {};
+  const summary = ctrl.summary || {};
+  const text = d.text || {};
+  const workWith = d.workWith || {};
+  const actionsObj = d.actions || {};
+  const chart = d.chart || {};
+
+  const nameCand =
+    (d.person && d.person.fullName) ||
+    identity.fullName ||
+    identity.name ||
+    d["p1:n"] ||
+    d.fullName ||
+    identity.preferredName ||
+    d.preferredName ||
+    d.name ||
+    "";
+
+  const dateLbl =
+    d.dateLbl ||
+    identity.dateLabel ||
+    identity.dateLbl ||
+    d.dateLabel ||
+    d["p1:d"] ||
+    "";
+
+  const domState =
+    ctrl.dominant ||
+    ctrl.dominantState ||
+    d.domState ||
+    d.dom ||
+    d["p3:dom"] ||
+    "";
+
+  const dom2State = ctrl.secondState || d.dom2 || d["p3:dom2"] || "";
+
+  // NEW: include ctrlTotals / mix in counts
+  const counts =
+    ctrl.counts ||
+    summary.counts ||
+    summary.stateFrequency ||
+    summary.ctrlTotals ||
+    summary.mix ||
+    d.counts ||
+    d["p3:counts"] ||
+    {};
+
+  const order = ctrl.order || d.order || d["p3:order"] || "";
+
+  const tldrRaw = text.tldr || d["p3:tldr"] || "";
+  const tldrLines = splitToList(tldrRaw).map(cleanBullet).slice(0, 5);
+
+  const actsIn = actionsObj.list || d.actions || d.actionsText || [];
+  const actsList = Array.isArray(actsIn)
+    ? actsIn.map((a) => cleanBullet(a.text || a))
+    : splitToList(actsIn).map(cleanBullet);
+  const act1 = actsList[0] || d["p9:action1"] || "";
+  const act2 = actsList[1] || d["p9:action2"] || "";
+
+  const chartUrl =
+    chart.spiderUrl ||
+    d.spiderChartUrl ||
+    d.spiderChartURL ||
+    d.chartUrl ||
+    d["p5:chart"] ||
+    "";
+
+  const out = {
+    raw: d,
+    person: d.person || { fullName: nameCand || "" },
+    name: nameCand || "",
+    dateLbl,
+    dom: domState || "",
+    dom2: dom2State || "",
+    domChar: d.domChar || "",
+    domDesc: d.domDesc || "",
+    domState,
+    counts,
+    order,
+    tips: [],
+    actions: actsList,
+    chartUrl,
+    layout: d.layout || null,
+    bands: ctrl.bands || summary.bands || d.bands || {},
+
+    "p1:n": d["p1:n"] || nameCand || "",
+    "p1:d": d["p1:d"] || dateLbl || "",
+
+    "p3:dom": d["p3:dom"] || domState || "",
+    "p3:exec": d["p3:exec"] || text.execSummary || "",
+    "p3:tldr1": d["p3:tldr1"] || tldrLines[0] || "",
+    "p3:tldr2": d["p3:tldr2"] || tldrLines[1] || "",
+    "p3:tldr3": d["p3:tldr3"] || tldrLines[2] || "",
+    "p3:tldr4": d["p3:tldr4"] || tldrLines[3] || "",
+    "p3:tldr5": d["p3:tldr5"] || tldrLines[4] || "",
+    "p3:tip": d["p3:tip"] || text.tipAction || "",
+
+    "p4:stateDeep": d["p4:stateDeep"] || text.stateSubInterpretation || "",
+
+    "p5:freq": d["p5:freq"] || text.frequency || "",
+    "p5:chart": d["p5:chart"] || chartUrl || "",
+
+    "p6:seq": d["p6:seq"] || text.sequence || "",
+
+    "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
+    "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
+
+    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
+    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
+    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
+    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
+
+    "p9:action1": act1,
+    "p9:action2": act2,
+    "p9:closing": d["p9:closing"] || actionsObj.closingNote || "",
+  };
+
+  return out;
 }
 
 /* ───────── template + asset loaders ───────── */
@@ -281,30 +465,56 @@ function makeSpiderChartUrl12(bandsRaw) {
           label: "",
           data: scaled,
           fill: true,
-          borderWidth: 0,
-          pointRadius: 0,
+          borderWidth: 3,
+          pointRadius: 4,
+          pointHoverRadius: 5,
         },
       ],
     },
     options: {
+      responsive: true,
       plugins: {
         legend: { display: false },
+        tooltip: { enabled: false },
       },
       scales: {
         r: {
-          min: 0,
-          max: 1,
-          ticks: { display: false },
-          grid: { display: false },
-          angleLines: { display: false },
-          pointLabels: { display: false },
+          suggestedMin: 0,
+          suggestedMax: 1,
+          ticks: {
+            display: false,
+          },
+          grid: {
+            circular: true,
+            lineWidth: 1,
+          },
+          angleLines: {
+            color: "rgba(0, 0, 0, 0.18)",
+            lineWidth: 1.2,
+          },
+          pointLabels: {
+            font: { size: 26, weight: "900" },
+            color: "#333333",
+            padding: 9,
+          },
         },
+      },
+      elements: {
+        line: { tension: 0.4 },
       },
     },
   };
 
-  const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+  const json = JSON.stringify(cfg);
+
+  return (
+    "https://quickchart.io/chart" +
+    "?version=4" +
+    "&width=700&height=700" +
+    "&backgroundColor=rgba(0,0,0,0)" +
+    "&c=" +
+    encodeURIComponent(json)
+  );
 }
 
 async function embedRemoteImage(pdfDoc, url) {
@@ -405,139 +615,17 @@ function drawTextBox(page, font, text, box, opts = {}) {
     yStart = pageH - yTop - totalHeight;
   }
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lw = font.widthOfTextAtSize(line, fontSize);
-    let xx = x;
-    if (align === "center") xx = x + (w - lw) / 2;
-    if (align === "right") xx = x + (w - lw);
-
-    const yy = yStart - i * (fontSize + lineGap);
-    page.drawText(line, { x: xx, y: yy, size: fontSize, font, color });
-  }
-}
-
-/* ───────── payload readers ───────── */
-async function readPayload(req) {
-  if (req.method === "POST") {
-    const chunks = [];
-    for await (const ch of req) chunks.push(ch);
-    const buf = Buffer.concat(chunks);
-    const raw = buf.toString("utf8") || "{}";
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return {};
+  lines.forEach((ln, idx) => {
+    const lineWidth = font.widthOfTextAtSize(ln, fontSize);
+    let drawX = x;
+    if (align === "center") {
+      drawX = x + (w - lineWidth) / 2;
+    } else if (align === "right") {
+      drawX = x + (w - lineWidth);
     }
-  }
-  // GET: read ?data=<base64json>
-  const url = new URL(req.url, "http://localhost");
-  const b64 = url.searchParams.get("data") || "";
-  if (!b64) return {};
-  try {
-    const raw = Buffer.from(b64, "base64").toString("utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
-
-/* ───────── input normaliser ───────── */
-function normaliseInput(src = {}) {
-  const d = isPlainObject(src) ? src : {};
-  const identity = isPlainObject(d.identity) ? d.identity : {};
-  const person = isPlainObject(d.person) ? d.person : {};
-  const ctrl = isPlainObject(d.ctrl) ? d.ctrl : {};
-  const text = isPlainObject(d.text) ? d.text : {};
-  const workWith = isPlainObject(d.workWith) ? d.workWith : {};
-  const actionsObj = isPlainObject(d.actions) ? d.actions : {};
-  const chart = isPlainObject(d.chart) ? d.chart : {};
-
-  const fullName =
-    S(
-      d.fullName ||
-        person.fullName ||
-        identity.fullName ||
-        identity.name ||
-        d.name ||
-        "",
-      ""
-    ).trim() || "";
-
-  const preferredName =
-    S(person.preferredName || identity.preferredName || "", "").trim() || "";
-
-  const name = preferredName || fullName || "";
-
-  const dateLbl =
-    S(
-      d.dateLbl ||
-        d.dateLabel ||
-        identity.dateLabel ||
-        identity.dateLbl ||
-        person.date ||
-        "",
-      ""
-    ).trim() || "";
-
-  const chartUrl = S(d.chartUrl || chart.url || "", "").trim() || "";
-
-  const tldrLines =
-    Array.isArray(text.tldr) && text.tldr.length
-      ? text.tldr
-      : Array.isArray(d.tldr) && d.tldr.length
-      ? d.tldr
-      : [];
-
-  const act1 = S(actionsObj.action1 || actionsObj[0] || "", "").trim();
-  const act2 = S(actionsObj.action2 || actionsObj[1] || "", "").trim();
-
-  const out = {
-    raw: d,
-    name,
-    fullName,
-    preferredName,
-    dateLbl,
-
-    "p1:n": d["p1:n"] || name || "",
-    "p1:d": d["p1:d"] || dateLbl || "",
-
-    "p3:dom": d["p3:dom"] || d.dom || ctrl.dom || "",
-    "p3:exec": d["p3:exec"] || text.execSummary || "",
-    "p3:tldr1": d["p3:tldr1"] || tldrLines[0] || "",
-    "p3:tldr2": d["p3:tldr2"] || tldrLines[1] || "",
-    "p3:tldr3": d["p3:tldr3"] || tldrLines[2] || "",
-    "p3:tldr4": d["p3:tldr4"] || tldrLines[3] || "",
-    "p3:tldr5": d["p3:tldr5"] || tldrLines[4] || "",
-    "p3:tip": d["p3:tip"] || text.tipAction || "",
-
-    "p4:stateDeep": d["p4:stateDeep"] || text.stateSubInterpretation || "",
-    "p4:tldr": d["p4:tldr"] || text.p4tldr || "",
-    "p4:action": d["p4:action"] || text.p4action || "",
-
-    "p5:freq": d["p5:freq"] || text.frequency || "",
-    "p5:chart": d["p5:chart"] || chartUrl || "",
-    "p5:tldr": d["p5:tldr"] || text.p5tldr || "",
-    "p5:action": d["p5:action"] || text.p5action || "",
-
-    "p6:seq": d["p6:seq"] || text.sequence || "",
-    "p6:tldr": d["p6:tldr"] || text.p6tldr || "",
-    "p6:action": d["p6:action"] || text.p6action || "",
-
-    "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
-    "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
-
-    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
-    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
-    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
-    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
-
-    "p9:action1": act1,
-    "p9:action2": act2,
-    "p9:closing": d["p9:closing"] || actionsObj.closingNote || "",
-  };
-
-  return out;
+    const drawY = yStart - idx * (fontSize + lineGap);
+    page.drawText(ln, { x: drawX, y: drawY, size: fontSize, font, color });
+  });
 }
 
 /* ───────── main handler ───────── */
@@ -693,28 +781,65 @@ export default async function handler(req, res) {
         maxLines: 15,
       },
       p9: {
-        tips1: { x: 30, y: 280, w: 550, size: 18, align: "left", maxLines: 4 },
-        tips2: { x: 30, y: 340, w: 550, size: 18, align: "left", maxLines: 4 },
-        acts1: { x: 30, y: 120, w: 550, size: 18, align: "left", maxLines: 4 },
-        acts2: { x: 30, y: 180, w: 550, size: 18, align: "left", maxLines: 4 },
+        lineGap: 6,
+        itemGap: 6,
+        bulletIndent: 18,
+        tips1: {
+          x: 30,
+          y: 175,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        tips2: {
+          x: 30,
+          y: 265,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        acts1: {
+          x: 30,
+          y: 405,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
+        acts2: {
+          x: 30,
+          y: 495,
+          w: 530,
+          h: 80,
+          size: 18,
+          align: "left",
+          maxLines: 4,
+        },
       },
     };
 
-    // layout override via payload
-    if (src && src.layout && isPlainObject(src.layout)) {
-      L = mergeLayout(L, src.layout);
+    if (P.layout && typeof P.layout === "object") {
+      L = mergeLayout(L, P.layout);
     }
 
-    // optional URL overrides
     applyQueryLayoutOverrides(L, q);
 
     /* p1: name + date */
     if (p1 && L.p1) {
-      if (P["p1:n"]) {
-        drawTextBox(p1, font, P["p1:n"], L.p1.name, { maxLines: 1 });
+      const nameText =
+        norm(P.name || (P.person && P.person.fullName) || P["p1:n"] || "");
+      const dateText = norm(P.dateLbl || P.dateLabel || P["p1:d"] || "");
+
+      if (nameText) {
+        drawTextBox(p1, font, nameText, L.p1.name, { maxLines: 1 });
       }
-      if (P["p1:d"]) {
-        drawTextBox(p1, font, P["p1:d"], L.p1.date, { maxLines: 1 });
+      if (dateText) {
+        drawTextBox(p1, font, dateText, L.p1.date, { maxLines: 1 });
       }
     }
 
@@ -730,12 +855,13 @@ export default async function handler(req, res) {
       ].filter(Boolean);
       const tip = norm(P["p3:tip"]);
 
-      const blocks = [];
-      if (tldrs.length) blocks.push(tldrs.join("\n\n")); // TLDR FIRST
-      if (exec) blocks.push(exec);
-      if (tip) blocks.push(tip);
+const blocks = [];
+if (tldrs.length) blocks.push(tldrs.join("\n\n"));  // TLDR FIRST
+if (exec) blocks.push(exec);
+if (tip) blocks.push(tip);
 
-      const body = blocks.filter(Boolean).join("\n\n\n");
+
+      const body = blocks.join("\n\n\n");
       if (body) {
         drawTextBox(p3, font, body, L.p3.domDesc, {
           maxLines: L.p3.domDesc.maxLines,
@@ -744,24 +870,18 @@ export default async function handler(req, res) {
     }
 
     /* p4: deep dive narrative */
-    if (p4 && L.p4 && L.p4.spider) {
-      const body = packSection(P["p4:tldr"], P["p4:stateDeep"], P["p4:action"]);
-      if (body) {
-        drawTextBox(p4, font, body, L.p4.spider, {
-          maxLines: L.p4.spider.maxLines,
-        });
-      }
+    if (p4 && L.p4 && L.p4.spider && P["p4:stateDeep"]) {
+      drawTextBox(p4, font, norm(P["p4:stateDeep"]), L.p4.spider, {
+        maxLines: L.p4.spider.maxLines,
+      });
     }
 
     /* p5: frequency narrative + radar chart */
     if (p5 && L.p5) {
-      if (L.p5.seqpat) {
-        const body = packSection(P["p5:tldr"], P["p5:freq"], P["p5:action"]);
-        if (body) {
-          drawTextBox(p5, font, body, L.p5.seqpat, {
-            maxLines: L.p5.seqpat.maxLines,
-          });
-        }
+      if (L.p5.seqpat && P["p5:freq"]) {
+        drawTextBox(p5, font, norm(P["p5:freq"]), L.p5.seqpat, {
+          maxLines: L.p5.seqpat.maxLines,
+        });
       }
 
       if (L.p5.chart) {
@@ -776,8 +896,6 @@ export default async function handler(req, res) {
 
         const H = p5.getHeight();
         const { x, y, w, h } = L.p5.chart;
-
-        // white backing to clear any template artefact behind the image
         p5.drawRectangle({
           x,
           y: H - y - h,
@@ -791,40 +909,36 @@ export default async function handler(req, res) {
     }
 
     /* p6: sequence */
-    if (p6 && L.p6 && L.p6.themeExpl) {
-      const body = packSection(P["p6:tldr"], P["p6:seq"], P["p6:action"]);
-      if (body) {
-        drawTextBox(p6, font, body, L.p6.themeExpl, {
-          maxLines: L.p6.themeExpl.maxLines,
-        });
-      }
+    if (p6 && L.p6 && L.p6.themeExpl && P["p6:seq"]) {
+      drawTextBox(p6, font, norm(P["p6:seq"]), L.p6.themeExpl, {
+        maxLines: L.p6.themeExpl.maxLines,
+      });
     }
 
     /* p7: themes top + low */
     if (p7 && Array.isArray(L.p7?.colBoxes) && L.p7.colBoxes.length >= 2) {
-      const a = L.p7.colBoxes[0];
-      const b = L.p7.colBoxes[1];
+      const top = norm(P["p7:themesTop"]);
+      const low = norm(P["p7:themesLow"]);
 
-      const txtA = norm(P["p7:themesTop"]);
-      const txtB = norm(P["p7:themesLow"]);
-
-      if (txtA) {
+      if (top) {
+        const box = L.p7.colBoxes[0];
         drawTextBox(
           p7,
           font,
-          txtA,
-          { x: a.x, y: a.y, w: a.w, size: L.p7.bodySize || 13, align: "left" },
-          { maxLines: L.p7.maxLines || 22 }
+          top,
+          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
+          { maxLines: L.p7.maxLines || 15 }
         );
       }
 
-      if (txtB) {
+      if (low) {
+        const box = L.p7.colBoxes[1];
         drawTextBox(
           p7,
           font,
-          txtB,
-          { x: b.x, y: b.y, w: b.w, size: L.p7.bodySize || 13, align: "left" },
-          { maxLines: L.p7.maxLines || 22 }
+          low,
+          { x: box.x, y: box.y, w: box.w, size: L.p7.bodySize || 13, align: "left" },
+          { maxLines: L.p7.maxLines || 15 }
         );
       }
     }
@@ -844,6 +958,7 @@ export default async function handler(req, res) {
         if (!txt) return;
         const idx = mapIdx[key];
         const box = L.p8.colBoxes[idx];
+        if (!box) return;
 
         drawTextBox(
           p8,
