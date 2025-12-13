@@ -282,7 +282,7 @@ async function embedRemoteImage(pdfDoc, url) {
 async function embedRadarFromBands(pdfDoc, page, box, bandsRaw, debug = false) {
   if (!pdfDoc || !page || !box || !bandsRaw) return;
 
-    if (debug) {
+  if (debug) {
     console.log("[fill-template] chart:enter", {
       hasBandsRaw: !!bandsRaw,
       keys: bandsRaw && typeof bandsRaw === "object" ? Object.keys(bandsRaw).length : 0,
@@ -308,16 +308,13 @@ async function embedRadarFromBands(pdfDoc, page, box, bandsRaw, debug = false) {
   const H = page.getHeight();
   const { x, y, w, h } = box;
 
-  if (debug) console.log("[fill-template] chart:draw", {
-    x, y, w, h,
-    yBL: H - y - h,
-    pageH: H
-  });
+  if (debug) console.log("[fill-template] chart:draw", { x, y, w, h, yBL: H - y - h, pageH: H });
 
   page.drawImage(img, { x, y: H - y - h, width: w, height: h });
 
   if (debug) console.log("[fill-template] chart:done");
 }
+
 
   const hasAny = Object.values(bandsRaw).some((v) => Number(v) > 0);
   if (!hasAny) return;
@@ -653,6 +650,7 @@ if (L.p5.chart) {
       pageW: p5.getWidth(),
     });
   }
+}
 
   try {
     await embedRadarFromBands(pdfDoc, p5, L.p5.chart, P.bands || {}, debug);
