@@ -412,7 +412,16 @@ function normaliseInput(d = {}) {
     "p6:seq": d["p6:seq"] || text.sequence || "",
     "p6:tldr": d["p6:tldr"] || text.p6tldr || "",
     "p6:action": d["p6:action"] || text.p6action || "",
+
+    "p7:themesTop": d["p7:themesTop"] || text.themesTop || text.themes_top || "",
+    "p7:themesLow": d["p7:themesLow"] || text.themesLow || text.themes_low || "",
+
+    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
+    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
+    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
+    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
   };
+
 }
 
 /* ───────── main handler ───────── */
@@ -448,29 +457,6 @@ export default async function handler(req, res) {
 
     const layout = mergeLayout(P.layout);
     const L = (layout && layout.pages) ? layout.pages : DEFAULT_LAYOUT.pages;
-    if (debug) {
-  console.log("[fill-template] layout.pages?", !!(layout && layout.pages));
-  console.log("[fill-template] boxes present?", {
-    p1: !!L?.p1,
-    p3: !!L?.p3?.domDesc,
-    p4: !!L?.p4?.spider,
-    p5text: !!L?.p5?.seqpat,
-    p5chart: !!L?.p5?.chart,
-    p6: !!L?.p6?.themeExpl,
-  });
-
-  console.log("[fill-template] content lengths", {
-    name: (P["p1:n"] || "").length,
-    date: (P["p1:d"] || "").length,
-    p3exec: (P["p3:exec"] || "").length,
-    p3tldr1: (P["p3:tldr1"] || "").length,
-    p4: (P["p4:stateDeep"] || "").length,
-    p5: (P["p5:freq"] || "").length,
-    p6: (P["p6:seq"] || "").length,
-    bandsKeys: Object.keys(P.bands || {}).length,
-  });
-}
-
 
     const pages = pdfDoc.getPages();
 
@@ -480,6 +466,55 @@ export default async function handler(req, res) {
     const p4 = pages[3] || null;
     const p5 = pages[4] || null;
     const p6 = pages[5] || null;
+    const p7 = pages[6] || null;
+    const p8 = pages[7] || null;
+
+    if (debug) {
+      console.log("[fill-template] layout.pages?", !!(layout && layout.pages));
+      console.log("[fill-template] pageCount", pages.length);
+      console.log("[fill-template] boxes present?", {
+        p1: !!L?.p1,
+        p3: !!L?.p3?.domDesc,
+        p4: !!L?.p4?.spider,
+        p5text: !!L?.p5?.seqpat,
+        p5chart: !!L?.p5?.chart,
+        p6: !!L?.p6?.themeExpl,
+
+        // NEW
+        p7: !!L?.p7,
+        p7top: !!L?.p7?.themesTop,
+        p7low: !!L?.p7?.themesLow,
+        p8: !!L?.p8,
+        p8C: !!L?.p8?.collabC,
+        p8T: !!L?.p8?.collabT,
+        p8R: !!L?.p8?.collabR,
+        p8L: !!L?.p8?.collabL,
+      });
+
+      console.log("[fill-template] content lengths", {
+        name: (P["p1:n"] || "").length,
+        date: (P["p1:d"] || "").length,
+        p3exec: (P["p3:exec"] || "").length,
+        p3tldr1: (P["p3:tldr1"] || "").length,
+        p4: (P["p4:stateDeep"] || "").length,
+        p5: (P["p5:freq"] || "").length,
+        p6: (P["p6:seq"] || "").length,
+
+        // NEW
+        p7top: (P["p7:themesTop"] || "").length,
+        p7low: (P["p7:themesLow"] || "").length,
+        p8C: (P["p8:collabC"] || "").length,
+        p8T: (P["p8:collabT"] || "").length,
+        p8R: (P["p8:collabR"] || "").length,
+        p8L: (P["p8:collabL"] || "").length,
+
+        bandsKeys: Object.keys(P.bands || {}).length,
+      });
+
+      console.log("[fill-template] pages present?", {
+        p1: !!p1, p3: !!p3, p4: !!p4, p5: !!p5, p6: !!p6, p7: !!p7, p8: !!p8
+      });
+    }
 
     /* p1: name + date */
     if (p1 && L.p1) {
@@ -490,7 +525,7 @@ export default async function handler(req, res) {
     /* p3: TLDR → main → action */
     if (p3 && L.p3?.domDesc) {
       const exec = norm(P["p3:exec"]);
-      const tldrs = [P["p3:tldr1"],P["p3:tldr2"],P["p3:tldr3"],P["p3:tldr4"],P["p3:tldr5"]]
+      const tldrs = [P["p3:tldr1"], P["p3:tldr2"], P["p3:tldr3"], P["p3:tldr4"], P["p3:tldr5"]]
         .map(norm)
         .filter(Boolean);
       const tip = norm(P["p3:tip"]);
@@ -530,17 +565,26 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, body, L.p6.themeExpl, { maxLines: L.p6.themeExpl.maxLines });
     }
 
+    /* p7: themes (Top + Low) */
+    if (p7 && L.p7) {
+      if (L.p7.themesTop && P["p7:themesTop"]) {
+        drawTextBox(p7, font, P["p7:themesTop"], L.p7.themesTop, { maxLines: L.p7.themesTop.maxLines });
+      }
+      if (L.p7.themesLow && P["p7:themesLow"]) {
+        drawTextBox(p7, font, P["p7:themesLow"], L.p7.themesLow, { maxLines: L.p7.themesLow.maxLines });
+      }
+    }
+
+    /* p8: workWith / collaboration */
+    if (p8 && L.p8) {
+      if (L.p8.collabC && P["p8:collabC"]) drawTextBox(p8, font, P["p8:collabC"], L.p8.collabC, { maxLines: L.p8.collabC.maxLines });
+      if (L.p8.collabT && P["p8:collabT"]) drawTextBox(p8, font, P["p8:collabT"], L.p8.collabT, { maxLines: L.p8.collabT.maxLines });
+      if (L.p8.collabR && P["p8:collabR"]) drawTextBox(p8, font, P["p8:collabR"], L.p8.collabR, { maxLines: L.p8.collabR.maxLines });
+      if (L.p8.collabL && P["p8:collabL"]) drawTextBox(p8, font, P["p8:collabL"], L.p8.collabL, { maxLines: L.p8.collabL.maxLines });
+    }
+
     const outBytes = await pdfDoc.save();
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(Buffer.from(outBytes));
-  } catch (err) {
-    console.error("[fill-template] CRASH", err);
-    res.status(500).json({
-      ok: false,
-      error: err?.message || String(err),
-      stack: err?.stack || null,
-    });
-  }
-}
