@@ -268,7 +268,7 @@ async function embedRemoteImage(pdfDoc, url) {
   catch { return await pdfDoc.embedJpg(buf); }
 }
 
-async function embedRadarFromBands(pdfDoc, page, box, bandsRaw, debug = false) {
+async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
   if (!pdfDoc || !page || !box || !bandsRaw) return;
 
   const hasAny =
@@ -286,7 +286,7 @@ async function embedRadarFromBands(pdfDoc, page, box, bandsRaw, debug = false) {
   page.drawImage(img, { x, y: H - y - h, width: w, height: h });
 }
 
-/* ───────── default layout (complete) ───────── */
+/* ───────── default layout (UPDATED: adds p9 actAnchor box) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
@@ -320,8 +320,8 @@ const DEFAULT_LAYOUT = {
 
     p7:  {
       hdrName:   { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      themesTop: { x: 30,  y: 200, w: 300, h: 900, size: 17, align: "left", maxLines: 28 },
-      themesLow: { x: 320, y: 200, w: 300, h: 900, size: 17, align: "left", maxLines: 28 },
+      themesTop: { x: 30,  y: 200, w: 590, h: 900, size: 17, align: "left", maxLines: 42 }, // widened for single-box theme mode
+      themesLow: { x: 320, y: 200, w: 300, h: 900, size: 17, align: "left", maxLines: 28 }, // kept for legacy 2-column
     },
 
     p8:  {
@@ -332,7 +332,11 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
     },
 
-    p9:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p9:  {
+      hdrName:   { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      actAnchor: { x: 25,  y: 200, w: 550, h: 220, size: 20, align: "left", maxLines: 8 }, // NEW: action anchor
+    },
+
     p10: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
   },
 };
@@ -360,12 +364,7 @@ function mergeLayout(overrides = null) {
   return out;
 }
 
-/* ───────── URL-driven layout overrides (for later coordinate shifting) ─────────
-   Pattern:
-   ?L_p3_domDesc_y=210
-   ?L_p7_themesTop_x=25
-   Supports keys: x,y,w,h,size,maxLines,align
-*/
+/* ───────── URL-driven layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layout, url) {
   if (!layout || !layout.pages || !url || !url.searchParams) return layout;
 
@@ -399,7 +398,7 @@ function applyLayoutOverridesFromUrl(layout, url) {
   return layout;
 }
 
-/* ───────── input normaliser ───────── */
+/* ───────── input normaliser (UPDATED for new payload keys) ───────── */
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const ctrl = d.ctrl || {};
@@ -447,16 +446,44 @@ function normaliseInput(d = {}) {
     (rootBands && Object.keys(rootBands).length ? rootBands : null) ||
     {};
 
+  // ---- UPDATED KEY COMPATIBILITY LAYER ----
+  // Exec
   const execTLDR = text.execSummary_tldr || "";
-  const domTLDR  = text.domState_tldr || "";
-  const freqTLDR = text.frequency_tldr || "";
-  const seqTLDR  = text.sequence_tldr || "";
-  const topTLDR  = text.themesTop_tldr || "";
-  const lowTLDR  = text.themesLow_tldr || "";
+  const execMain = text.execSummary || "";
+  const execTip  = text.execSummary_tipact || text.tipAction || "";
 
-  const domMain = text.domState || "";
+  // State (Gen2)
+  const stateTLDR  = text.state_tldr || text.domState_tldr || "";
+  const stateMain  = text.domState || "";
   const bottomMain = text.bottomState || "";
-  const domPlusBottom = bottomMain ? `${norm(domMain)}\n\n${norm(bottomMain)}` : domMain;
+  const stateTip   = text.state_tipact || ""; // optional, new
+
+  // Frequency + sequence
+  const freqTLDR = text.frequency_tldr || "";
+  const freqMain = text.frequency || "";
+
+  const seqTLDR = text.sequence_tldr || "";
+  const seqMain = text.sequence || "";
+  const seqTip  = text.sequence_tipact || ""; // new
+
+  // Themes
+  // New “single theme block” format:
+  const themeTLDR = text.theme_tldr || "";
+  const themeMain = text.theme || "";
+  const themeTip  = text.theme_tipact || "";
+
+  // Legacy “two box” format:
+  const topTLDR = text.themesTop_tldr || themeTLDR || "";
+  const lowTLDR = text.themesLow_tldr || "";
+
+  // If new single theme exists, push it into themesTop slot (and leave low empty)
+  const themesTopMain = text.themesTop || themeMain || "";
+  const themesLowMain = text.themesLow || "";
+
+  // Action Anchor (Gen5)
+  const actAnchor = text.act_anchor || text.action_anchor || "";
+
+  const domPlusBottom = bottomMain ? `${norm(stateMain)}\n\n${norm(bottomMain)}` : stateMain;
 
   return {
     raw: d,
@@ -467,32 +494,42 @@ function normaliseInput(d = {}) {
     "p1:d": d["p1:d"] || dateLbl || "",
     "p3:dom": d["p3:dom"] || domState || "",
 
-    "p3:exec": d["p3:exec"] || text.execSummary || "",
+    // Page 3 (Exec) — TLDR first
+    "p3:exec": d["p3:exec"] || execMain || "",
     "p3:tldr": d["p3:tldr"] || execTLDR || "",
-    "p3:tip": d["p3:tip"] || text.tipAction || "",
+    "p3:tip":  d["p3:tip"]  || execTip  || "",
 
+    // Page 4 (State) — TLDR first
     "p4:stateDeep": d["p4:stateDeep"] || domPlusBottom || "",
-    "p4:tldr": d["p4:tldr"] || domTLDR || "",
-    "p4:action": d["p4:action"] || "",
+    "p4:tldr":      d["p4:tldr"]      || stateTLDR || "",
+    "p4:action":    d["p4:action"]    || stateTip  || "",
 
-    "p5:freq": d["p5:freq"] || text.frequency || "",
-    "p5:tldr": d["p5:tldr"] || freqTLDR || "",
-    "p5:action": d["p5:action"] || "",
-    "p5:chart": d["p5:chart"] || chartUrl || "",
+    // Page 5 (Frequency) — TLDR first
+    "p5:freq":   d["p5:freq"]   || freqMain || "",
+    "p5:tldr":   d["p5:tldr"]   || freqTLDR || "",
+    "p5:action": d["p5:action"] || "", // no freq action in your new payload
+    "p5:chart":  d["p5:chart"]  || chartUrl || "",
 
-    "p6:seq": d["p6:seq"] || text.sequence || "",
-    "p6:tldr": d["p6:tldr"] || seqTLDR || "",
-    "p6:action": d["p6:action"] || "",
+    // Page 6 (Sequence) — TLDR first
+    "p6:seq":    d["p6:seq"]    || seqMain || "",
+    "p6:tldr":   d["p6:tldr"]   || seqTLDR || "",
+    "p6:action": d["p6:action"] || seqTip  || "",
 
-    "p7:themesTop": d["p7:themesTop"] || text.themesTop || "",
-    "p7:themesLow": d["p7:themesLow"] || text.themesLow || "",
+    // Page 7 (Themes) — TLDR first (+ optional theme tip packed into top)
+    "p7:themesTop":      d["p7:themesTop"]      || themesTopMain || "",
+    "p7:themesLow":      d["p7:themesLow"]      || themesLowMain || "",
     "p7:themesTop_tldr": d["p7:themesTop_tldr"] || topTLDR || "",
     "p7:themesLow_tldr": d["p7:themesLow_tldr"] || lowTLDR || "",
+    "p7:themesTop_tip":  themeTip || "",
 
+    // Page 8 (WorkWith)
     "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
     "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
     "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
     "p8:collabL": d["p8:collabL"] || workWith.lead || "",
+
+    // Page 9 (Action Anchor)
+    "p9:actAnchor": d["p9:actAnchor"] || actAnchor || "",
   };
 }
 
@@ -508,20 +545,31 @@ export default async function handler(req, res) {
     if (debug) {
       return res.status(200).json({
         ok: true,
-        where: "fill-template:v2:after_normaliseInput",
+        where: "fill-template:v3:after_normaliseInput",
         lengths: {
           p3_exec: (P["p3:exec"] || "").length,
           p3_tldr: (P["p3:tldr"] || "").length,
+          p3_tip:  (P["p3:tip"]  || "").length,
+
           p4_main: (P["p4:stateDeep"] || "").length,
           p4_tldr: (P["p4:tldr"] || "").length,
+          p4_act:  (P["p4:action"] || "").length,
+
           p5_main: (P["p5:freq"] || "").length,
           p5_tldr: (P["p5:tldr"] || "").length,
+
           p6_main: (P["p6:seq"] || "").length,
           p6_tldr: (P["p6:tldr"] || "").length,
+          p6_act:  (P["p6:action"] || "").length,
+
           p7_top: (P["p7:themesTop"] || "").length,
           p7_top_tldr: (P["p7:themesTop_tldr"] || "").length,
           p7_low: (P["p7:themesLow"] || "").length,
           p7_low_tldr: (P["p7:themesLow_tldr"] || "").length,
+          p7_top_tip: (P["p7:themesTop_tip"] || "").length,
+
+          p9_anchor: (P["p9:actAnchor"] || "").length,
+
           bandsKeys: Object.keys(P.bands || {}).length,
         },
         domSecond: safeJson(computeDomAndSecondKeys(P)),
@@ -539,7 +587,7 @@ export default async function handler(req, res) {
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    // Layout: default + payload overrides + URL overrides (for later shifting)
+    // Layout: default + payload overrides + URL overrides
     let layout = mergeLayout(P.layout);
     layout = applyLayoutOverridesFromUrl(layout, url);
     const L = (layout && layout.pages) ? layout.pages : DEFAULT_LAYOUT.pages;
@@ -563,6 +611,7 @@ export default async function handler(req, res) {
     const p6 = pages[5] || null;
     const p7 = pages[6] || null;
     const p8 = pages[7] || null;
+    const p9 = pages[8] || null;
 
     /* p1: name + date */
     if (p1 && L.p1) {
@@ -576,7 +625,7 @@ export default async function handler(req, res) {
       drawTextBox(p3, font, body, L.p3.domDesc, { maxLines: L.p3.domDesc.maxLines });
     }
 
-    /* p4: Dom state (plus bottom state) — TLDR first */
+    /* p4: State deep-dive — TLDR first */
     if (p4 && L.p4?.spider) {
       const body = packSection(P["p4:tldr"], P["p4:stateDeep"], P["p4:action"]);
       drawTextBox(p4, font, body, L.p4.spider, { maxLines: L.p4.spider.maxLines });
@@ -592,7 +641,7 @@ export default async function handler(req, res) {
       if (L.p5.chart) {
         const bandsObj = P.bands || {};
         try {
-          await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bandsObj, false);
+          await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bandsObj);
         } catch (e) {
           console.warn("[fill-template] Radar chart skipped:", e?.message || String(e));
         }
@@ -605,10 +654,10 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, body, L.p6.themeExpl, { maxLines: L.p6.themeExpl.maxLines });
     }
 
-    /* p7: Themes — TLDR first per box */
+    /* p7: Themes — TLDR first (+ optional theme tip packed into the top box) */
     if (p7 && L.p7) {
       if (L.p7.themesTop) {
-        const topBody = packSection(P["p7:themesTop_tldr"], P["p7:themesTop"], "");
+        const topBody = packSection(P["p7:themesTop_tldr"], P["p7:themesTop"], P["p7:themesTop_tip"]);
         drawTextBox(p7, font, topBody, L.p7.themesTop, { maxLines: L.p7.themesTop.maxLines });
       }
       if (L.p7.themesLow) {
@@ -623,6 +672,11 @@ export default async function handler(req, res) {
       if (L.p8.collabT && P["p8:collabT"]) drawTextBox(p8, font, P["p8:collabT"], L.p8.collabT, { maxLines: L.p8.collabT.maxLines });
       if (L.p8.collabR && P["p8:collabR"]) drawTextBox(p8, font, P["p8:collabR"], L.p8.collabR, { maxLines: L.p8.collabR.maxLines });
       if (L.p8.collabL && P["p8:collabL"]) drawTextBox(p8, font, P["p8:collabL"], L.p8.collabL, { maxLines: L.p8.collabL.maxLines });
+    }
+
+    /* p9: Action Anchor */
+    if (p9 && L.p9?.actAnchor && P["p9:actAnchor"]) {
+      drawTextBox(p9, font, P["p9:actAnchor"], L.p9.actAnchor, { maxLines: L.p9.actAnchor.maxLines });
     }
 
     const outBytes = await pdfDoc.save();
