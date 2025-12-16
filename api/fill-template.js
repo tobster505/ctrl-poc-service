@@ -26,8 +26,9 @@ function safeJson(obj) {
 function underlineLine(title) {
   const t = norm(title || "");
   const len = Math.max(6, Math.min(32, t.length));
-  return "─".repeat(len);
+  return "-".repeat(len); // ASCII-safe for WinAnsi
 }
+
 
 // Convert "A • B • C" OR "A || B || C" OR newline lists into bullet lines
 function toBulletLines(raw) {
@@ -46,7 +47,7 @@ function toBulletLines(raw) {
   const alreadyBullets = parts.every(p => /^[-•*]\s+/.test(p));
   if (alreadyBullets) return parts.join("\n");
 
-  return parts.map(p => `• ${p}`).join("\n");
+  return parts.map(p => `- ${p}`).join("\n");
 }
 
 function titledBlock(title, body, opts = {}) {
