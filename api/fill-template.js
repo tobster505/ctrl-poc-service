@@ -550,15 +550,16 @@ const P = normalisePayload(payload);
     if (headerName) {
       for (let i = 1; i < pages.length; i++) {
         const pageKey = `p${i + 1}`;
-        const box = L?.[pageKey]?.hdrName;
-        if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
+const box = L?.[pageKey]?.hdrName || L?.p3?.hdrName; // fallback to p3 header coords
+if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
+
       }
     }
 
     // --- Page 1: cover ---
     if (pages[0] && L.p1) {
       if (L.p1.name)  drawTextBox(pages[0], font, P["p1:n"], L.p1.name,  { maxLines: L.p1.name.maxLines ?? 1 });
-      if (L.p1.email) drawTextBox(pages[0], font, P["p1:e"], L.p1.email, { maxLines: L.p1.email.maxLines ?? 1 });
+
       if (L.p1.date)  drawTextBox(pages[0], font, P["p1:d"], L.p1.date,  { maxLines: L.p1.date.maxLines ?? 1 });
     }
 
@@ -577,14 +578,8 @@ const P = normalisePayload(payload);
       );
 
       // Executive Summary (paragraph)
-      writeSection(
-        p3, font,
-        "Executive Summary",
-        P["p3:exec"],
-        L.p3.execTitle,
-        L.p3.execBody,
-        "paragraph",
-        { maxLines: L.p3.execBody?.maxLines ?? 12 }
+drawTextBox(p3, font, P["p3:exec"], L.p3.execBody, { maxLines: L.p3.execBody?.maxLines ?? 12 });
+
       );
 
       // Key Action (short)
@@ -616,14 +611,8 @@ const P = normalisePayload(payload);
       const domText = norm(P["p4:stateDeep"]);
       const bottomText = norm(P["p4:bottom"]);
       const p4Exec = [domText, bottomText].filter(Boolean).join("\n\n");
-      writeSection(
-        p4, font,
-        "Executive Summary",
-        p4Exec,
-        L.p4.execTitle,
-        L.p4.execBody,
-        "paragraph",
-        { maxLines: L.p4.execBody?.maxLines ?? 11 }
+drawTextBox(p4, font, p4Exec, L.p4.execBody, { maxLines: L.p4.execBody?.maxLines ?? 11 });
+
       );
 
       writeSection(
@@ -650,14 +639,8 @@ const P = normalisePayload(payload);
         { maxLines: L.p5.tldrBody?.maxLines ?? 9 }
       );
 
-      writeSection(
-        p5, font,
-        "Executive Summary",
-        P["p5:freq"],
-        L.p5.execTitle,
-        L.p5.execBody,
-        "paragraph",
-        { maxLines: L.p5.execBody?.maxLines ?? 14 }
+drawTextBox(p5, font, P["p5:freq"],  L.p5.execBody, { maxLines: L.p5.execBody?.maxLines ?? 14 });
+
       );
     }
 
@@ -674,14 +657,8 @@ const P = normalisePayload(payload);
         { maxLines: L.p6.tldrBody?.maxLines ?? 9 }
       );
 
-      writeSection(
-        p6, font,
-        "Executive Summary",
-        P["p6:seq"],
-        L.p6.execTitle,
-        L.p6.execBody,
-        "paragraph",
-        { maxLines: L.p6.execBody?.maxLines ?? 11 }
+drawTextBox(p6, font, P["p6:seq"],   L.p6.execBody, { maxLines: L.p6.execBody?.maxLines ?? 11 });
+
       );
 
       writeSection(
@@ -708,14 +685,8 @@ const P = normalisePayload(payload);
         { maxLines: L.p7.tldrBody?.maxLines ?? 9 }
       );
 
-      writeSection(
-        p7, font,
-        "Executive Summary",
-        P["p7:theme"],
-        L.p7.execTitle,
-        L.p7.execBody,
-        "paragraph",
-        { maxLines: L.p7.execBody?.maxLines ?? 11 }
+drawTextBox(p7, font, P["p7:theme"], L.p7.execBody, { maxLines: L.p7.execBody?.maxLines ?? 11 });
+
       );
 
       writeSection(
@@ -752,14 +723,8 @@ const P = normalisePayload(payload);
         { maxLines: L.p9.tldrBody?.maxLines ?? 9 }
       );
 
-      writeSection(
-        p9, font,
-        "Executive Summary",
-        P["p9:exec"],
-        L.p9.execTitle,
-        L.p9.execBody,
-        "paragraph",
-        { maxLines: L.p9.execBody?.maxLines ?? 11 }
+drawTextBox(p9, font, P["p9:exec"],  L.p9.execBody, { maxLines: L.p9.execBody?.maxLines ?? 11 });
+
       );
     }
 
