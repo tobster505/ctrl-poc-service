@@ -44,6 +44,12 @@ function tightBullets(text) {
   return lines.join("\n");
 }
 
+// Alias: earlier code uses tightTldrBullets name
+function tightTldrBullets(text){
+  return tightBullets(text);
+}
+
+
 /* ───────── TL→BL rect helper ───────── */
 const rectTLtoBL = (page, box, inset = 0) => {
   const pageH = page.getHeight();
