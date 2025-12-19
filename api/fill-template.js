@@ -1,6 +1,8 @@
 /**
  * CTRL PoC Export Service · fill-template (Starter/PoC flow)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
+ *
+ * VERSION: V3 (adds split Frequency page blocks for TLDR/main/action)
  */
 export const config = { runtime: "nodejs" };
 
@@ -31,6 +33,14 @@ function packSection(tldr, main, action) {
   // Slightly tighter vertical rhythm
   return blocks.join("\n\n");
 }
+
+function packTldrOnly(tldrText) {
+  const t = norm(tldrText);
+  if (!t) return "";
+  // Always show the TLDR header.
+  return `TLDR\n\n${t}`;
+}
+
 
 // TLDR should be: one bullet = one line, with no empty lines.
 function tightBullets(text) {
@@ -327,9 +337,16 @@ const DEFAULT_LAYOUT = {
     },
 
     p5:  {
-      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      seqpat:  { x: 25, y: 200, w: 550, h: 900, size: 18, align: "left", maxLines: 38 },
-      chart:   { x: 48, y: 462, w: 500, h: 300 },
+      hdrName:  { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      // Frequency page: allow TLDR, main narrative, and action to be moved independently.
+      // URL params:
+      //   &L_p5_freqTLDR_x=... etc
+      //   &L_p5_freqMain_x=... etc
+      //   &L_p5_freqAct_x=... etc
+      freqTLDR: { x: 25, y: 200, w: 550, h: 130, size: 18, align: "left", maxLines: 8 },
+      freqMain: { x: 25, y: 340, w: 550, h: 510, size: 18, align: "left", maxLines: 26 },
+      freqAct:  { x: 25, y: 865, w: 550, h: 130, size: 18, align: "left", maxLines: 8 },
+      chart:    { x: 48, y: 462, w: 500, h: 300 },
     },
 
     p6:  {
@@ -651,13 +668,27 @@ export default async function handler(req, res) {
       drawTextBox(p4, font, body, L.p4.spider, { maxLines: L.p4.spider.maxLines });
     }
 
-    /* p5: Frequency — TLDR first + chart */
+    /* p5: Frequency — split blocks (TLDR / main / action) + chart */
     if (p5 && L.p5) {
-      if (L.p5.seqpat) {
-        const body = packSection(tightTldrBullets(P["p5:tldr"]), P["p5:freq"], P["p5:action"]);
-        drawTextBox(p5, font, body, L.p5.seqpat, { maxLines: L.p5.seqpat.maxLines });
+      // TLDR block (keeps the 'TLDR' title)
+      if (L.p5.freqTLDR) {
+        const body = packTldrOnly(tightTldrBullets(P["p5:tldr"]));
+        drawTextBox(p5, font, body, L.p5.freqTLDR, { maxLines: L.p5.freqTLDR.maxLines });
       }
 
+      // Main narrative block (no mid-page title; plain text)
+      if (L.p5.freqMain) {
+        const body = norm(P["p5:freq"]);
+        drawTextBox(p5, font, body, L.p5.freqMain, { maxLines: L.p5.freqMain.maxLines });
+      }
+
+      // Action / tip block (no title; plain text)
+      if (L.p5.freqAct) {
+        const body = norm(P["p5:action"]);
+        drawTextBox(p5, font, body, L.p5.freqAct, { maxLines: L.p5.freqAct.maxLines });
+      }
+
+      // Chart image
       if (L.p5.chart) {
         const bandsObj = P.bands || {};
         try {
