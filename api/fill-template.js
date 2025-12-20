@@ -354,6 +354,11 @@ function computeDomAndSecondKeys(P) {
 }
 
 /* ───────── radar chart embed (QuickChart) ───────── */
+
+/**
+ * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
+ * (Unchanged from V8)
+ */
 function makeSpiderChartUrl12(bandsRaw) {
   const labels = [
     "C_low","C_mid","C_high","T_low","T_mid","T_high",
@@ -395,6 +400,107 @@ function makeSpiderChartUrl12(bandsRaw) {
   return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
 }
 
+/**
+ * 8-spoke directional chart for users:
+ * Spokes: C, C→T, T, T→R, R, R→L, L, L→C
+ * Labels show only: C, T, R, L (transition spokes are blank labels)
+ *
+ * Tie rules:
+ * - Find max among [low, mid, high]
+ * - If single winner: allocate total to that target
+ * - If 2-way tie: split total 50/50 across the two tied targets
+ * - If 3-way tie: split total 1/3 each across all three targets
+ *
+ * Targets:
+ * - low  -> previous transition spoke
+ * - mid  -> state spoke
+ * - high -> next transition spoke
+ */
+function makeSpiderChartUrl8Directional(bandsRaw) {
+  const n = (k) => Number(bandsRaw?.[k] || 0);
+
+  // 8 slots: 0:C, 1:CT, 2:T, 3:TR, 4:R, 5:RL, 6:L, 7:LC
+  const out = new Array(8).fill(0);
+
+  const addState = (stateKey, low, mid, high) => {
+    const total = low + mid + high;
+    if (total <= 0) return;
+
+    const mx = Math.max(low, mid, high);
+
+    // Which are tied for max?
+    const winners = [];
+    if (low === mx) winners.push("low");
+    if (mid === mx) winners.push("mid");
+    if (high === mx) winners.push("high");
+
+    const share = total / winners.length;
+
+    // Map dominance target -> 8-spoke index
+    // State axis indices:
+    const stateIdx = { C: 0, T: 2, R: 4, L: 6 }[stateKey];
+
+    // Previous transition:
+    // C low -> L→C (7), T low -> C→T (1), R low -> T→R (3), L low -> R→L (5)
+    const prevIdx = { C: 7, T: 1, R: 3, L: 5 }[stateKey];
+
+    // Next transition:
+    // C high -> C→T (1), T high -> T→R (3), R high -> R→L (5), L high -> L→C (7)
+    const nextIdx = { C: 1, T: 3, R: 5, L: 7 }[stateKey];
+
+    for (const w of winners) {
+      if (w === "low") out[prevIdx] += share;
+      if (w === "mid") out[stateIdx] += share;
+      if (w === "high") out[nextIdx] += share;
+    }
+  };
+
+  // Pull sub-states
+  addState("C", n("C_low"), n("C_mid"), n("C_high"));
+  addState("T", n("T_low"), n("T_mid"), n("T_high"));
+  addState("R", n("R_low"), n("R_mid"), n("R_high"));
+  addState("L", n("L_low"), n("L_mid"), n("L_high"));
+
+  // Only label main states; transitions blank
+  const labels = ["C", "", "T", "", "R", "", "L", ""];
+
+  const maxVal = Math.max(...out, 1);
+  const scaled = out.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const cfg = {
+    type: "radar",
+    data: {
+      labels,
+      datasets: [{
+        label: "",
+        data: scaled,
+        fill: true,
+        borderWidth: 0,
+        pointRadius: 0,
+        backgroundColor: "rgba(184, 15, 112, 0.35)",
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        r: {
+          min: 0, max: 1,
+          ticks: { display: false },
+          grid: { display: false },
+          angleLines: { display: false },
+          pointLabels: {
+            display: true,
+            font: { size: 18, weight: "bold" },
+          },
+        },
+      },
+    },
+  };
+
+  const enc = encodeURIComponent(JSON.stringify(cfg));
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+}
+
 async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
 
@@ -413,6 +519,30 @@ async function embedRemoteImage(pdfDoc, url) {
 
 async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   if (!pdfDoc || !page || !box) return;
+
+  // Prefer explicit chart URL if provided (Botpress can send 8-spoke if you want)
+  let url = String(chartUrl || "").trim();
+
+  if (!url) {
+    const hasAny =
+      bandsRaw && typeof bandsRaw === "object" &&
+      Object.values(bandsRaw).some((v) => Number(v) > 0);
+    if (!hasAny) return;
+
+    // ✅ Default for user-facing PDF: 8-spoke directional chart
+    url = makeSpiderChartUrl8Directional(bandsRaw);
+
+    // NOTE: We keep makeSpiderChartUrl12(bandsRaw) available for fallback/storage elsewhere.
+    // If you later want Vercel to also *return* url12 in debug, we can add it to the probe.
+  }
+
+  const img = await embedRemoteImage(pdfDoc, url);
+  if (!img) return;
+
+  const H = page.getHeight();
+  page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
+}
+
 
   // Prefer explicit chart URL if provided
   let url = S(chartUrl).trim();
@@ -681,13 +811,23 @@ function buildMasterProbe(P, domSecond) {
   const email = S(P.identity?.email || "");
   const dateLabel = S(P.identity?.dateLabel || P["p1:d"] || "");
 
-  const bands = P.bands || {};
+  // Prefer top-level P.bands, but fall back to ctrl.bands if present
+  const bands = (P && P.bands && typeof P.bands === "object") ? P.bands
+              : (P && P.ctrl && P.ctrl.bands && typeof P.ctrl.bands === "object") ? P.ctrl.bands
+              : {};
+
   const bandKeys = Object.keys(bands);
   const required12 = [
     "C_low","C_mid","C_high","T_low","T_mid","T_high",
     "R_low","R_mid","R_high","L_low","L_mid","L_high",
   ];
   const present12 = required12.filter((k) => bandKeys.includes(k)).length;
+
+  // Chart URLs (debug only): 8-spoke directional + 12-spoke raw fallback
+  let url8 = "";
+  let url12 = "";
+  try { url8 = makeSpiderChartUrl8Directional(bands); } catch (e) { url8 = ""; }
+  try { url12 = makeSpiderChartUrl12(bands); } catch (e) { url12 = ""; }
 
   const textKeys = 0
     + (P["p3:tldr"] ? 1 : 0) + (P["p3:main"] ? 1 : 0) + (P["p3:act"] ? 1 : 0)
@@ -736,6 +876,10 @@ function buildMasterProbe(P, domSecond) {
     ok: true,
     where: "fill-template:v8:master_probe:summary",
     domSecond: safeJson(domSecond),
+
+    // ✅ new: chart URLs you can store in Sheets/Drive
+    chartUrls: { url8, url12 },
+
     identity: {
       fullName: { has: !!fullName, len: fullName.length, preview: fullName.slice(0, 40) },
       email: { has: !!email, len: email.length, preview: email.slice(0, 40) },
@@ -788,6 +932,7 @@ function buildMasterProbe(P, domSecond) {
     },
   };
 }
+
 
 /* ───────── main handler ───────── */
 export default async function handler(req, res) {
