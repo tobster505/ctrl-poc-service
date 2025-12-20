@@ -377,9 +377,61 @@ function makeSpiderChartUrl12(bandsRaw) {
         label: "",
         data: scaled,
         fill: true,
-        borderWidth: 0,
+/* ───────── radar chart embed (QuickChart) ───────── */
+
+/**
+ * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
+ * (Unchanged behaviour; kept stable.)
+ */
+function makeSpiderChartUrl12(bandsRaw) {
+  const labels = [
+    "C_low","C_mid","C_high","T_low","T_mid","T_high",
+    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  ];
+
+  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
+  const maxVal = Math.max(...vals, 1);
+  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const cfg = {
+    type: "radar",
+    data: {
+      labels,
+      datasets: [{
+        label: "",
+        data: scaled,
+        fill: true,
+/* ───────── radar chart embed (QuickChart) ───────── */
+
+/**
+ * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
+ * Uses Chart.js v4 via URL param so options behave predictably.
+ */
+function makeSpiderChartUrl12(bandsRaw) {
+  const labels = [
+    "C_low","C_mid","C_high","T_low","T_mid","T_high",
+    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  ];
+
+  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
+  const maxVal = Math.max(...vals, 1);
+  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const cfg = {
+    type: "radar",
+    data: {
+      labels,
+      datasets: [{
+        label: "",
+        data: scaled,
+        fill: true,
+        borderWidth: 3,
         pointRadius: 0,
-        backgroundColor: "rgba(184, 15, 112, 0.35)",
+        tension: 0.35,                 // ✅ curved line
+        borderJoinStyle: "round",       // ✅ rounded corners
+        capBezierPoints: true,          // ✅ smoother curves
+        backgroundColor: "rgba(184, 15, 112, 0.25)",
+        borderColor: "rgba(66, 37, 135, 0.95)",
       }],
     },
     options: {
@@ -397,23 +449,21 @@ function makeSpiderChartUrl12(bandsRaw) {
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+  // ✅ force Chart.js v4 so "scales.r" works and ticks/grid truly hide
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
 }
 
 /**
  * 8-spoke directional chart for users:
  * Spokes: C, C→T, T, T→R, R, R→L, L, L→C
- * Labels show only: C, T, R, L (transition spokes are blank labels)
+ * Labels show only: C, T, R, L (transition spokes blank)
  *
- * Tie maths (fully handled):
- * - If one winner (low/mid/high): allocate TOTAL to that target
- * - If 2-way tie: split TOTAL 50/50 across the tied targets
- * - If 3-way tie: split TOTAL 1/3 each
- *
- * Targets:
- * - low  -> previous transition spoke
- * - mid  -> state spoke
- * - high -> next transition spoke
+ * IMPORTANT CHANGE:
+ * ✅ Proportional drift, not winner-takes-all.
+ * This naturally handles all ties:
+ * - If low==mid==high, each gets 1/3 of total
+ * - If two tie, they share proportionally (because values are equal)
+ * - If one dominates, it receives the largest share (but not 100% unless others are 0)
  */
 function makeSpiderChartUrl8Directional(bandsRaw) {
   const n = (k) => Number(bandsRaw?.[k] || 0);
@@ -425,25 +475,14 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
     const total = low + mid + high;
     if (total <= 0) return;
 
-    const mx = Math.max(low, mid, high);
-
-    // Determine tie set (strict equality is fine because your inputs are deterministic decimals)
-    const winners = [];
-    if (low === mx) winners.push("low");
-    if (mid === mx) winners.push("mid");
-    if (high === mx) winners.push("high");
-
-    const share = total / winners.length;
-
     const stateIdx = { C: 0, T: 2, R: 4, L: 6 }[stateKey];
     const prevIdx  = { C: 7, T: 1, R: 3, L: 5 }[stateKey]; // towards previous state
     const nextIdx  = { C: 1, T: 3, R: 5, L: 7 }[stateKey]; // towards next state
 
-    for (const w of winners) {
-      if (w === "low")  out[prevIdx]  += share;
-      if (w === "mid")  out[stateIdx] += share;
-      if (w === "high") out[nextIdx]  += share;
-    }
+    // ✅ proportional drift (ties handled automatically)
+    out[prevIdx]  += total * (low  / total);
+    out[stateIdx] += total * (mid  / total);
+    out[nextIdx]  += total * (high / total);
   };
 
   addState("C", n("C_low"), n("C_mid"), n("C_high"));
@@ -451,10 +490,11 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
   addState("R", n("R_low"), n("R_mid"), n("R_high"));
   addState("L", n("L_low"), n("L_mid"), n("L_high"));
 
-  // Only label main states; transitions blank
+  // Labels: show only the 4 states
   const labels = ["C", "", "T", "", "R", "", "L", ""];
 
-  // Scale to 0..1 so the chart always fits nicely
+  // Keep raw magnitudes (0..max) so it feels like your screenshot scales (1,2,3 etc.)
+  // but we still normalise to 0..1 for chart fit.
   const maxVal = Math.max(...out, 1);
   const scaled = out.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
@@ -466,9 +506,13 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
         label: "",
         data: scaled,
         fill: true,
-        borderWidth: 0,
+        borderWidth: 4,
         pointRadius: 0,
-        backgroundColor: "rgba(184, 15, 112, 0.35)",
+        tension: 0.40,                 // ✅ curve like your example
+        borderJoinStyle: "round",       // ✅ rounded joints
+        capBezierPoints: true,          // ✅ smoother curves
+        backgroundColor: "rgba(184, 15, 112, 0.22)",
+        borderColor: "rgba(66, 37, 135, 0.95)",
       }],
     },
     options: {
@@ -481,7 +525,7 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
           angleLines: { display: false },
           pointLabels: {
             display: true,
-            font: { size: 18, weight: "bold" },
+            font: { size: 20, weight: "bold" },
           },
         },
       },
@@ -489,7 +533,8 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+  // ✅ force Chart.js v4 so the config behaves consistently
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
 }
 
 async function embedRemoteImage(pdfDoc, url) {
@@ -532,6 +577,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   const H = page.getHeight();
   page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
 }
+
 
 /* ───────── default layout (supports your URL override scheme) ───────── */
 const DEFAULT_LAYOUT = {
