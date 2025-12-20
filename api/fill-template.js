@@ -1,8 +1,8 @@
 /**
- * CTRL PoC Export Service · fill-template (V10)
+ * CTRL PoC Export Service · fill-template (V8)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  *
- * Fixes through V10:
+ * Fixes in V8:
  * 1) Output filename: PoC_Profile_{Firstname}_{Surname}_{Date}.pdf
  * 2) URL coordinate overrides (full) supported for ALL boxes (TLDR/main/action, etc.)
  * 3) Header on pages 2–10 becomes just "FullName" (by masking template header text)
@@ -353,13 +353,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-
 /* ───────── radar chart embed (QuickChart) ───────── */
-
-/**
- * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
- * Uses Chart.js v4 via URL param so options behave predictably.
- */
 function makeSpiderChartUrl12(bandsRaw) {
   const labels = [
     "C_low","C_mid","C_high","T_low","T_mid","T_high",
@@ -367,8 +361,6 @@ function makeSpiderChartUrl12(bandsRaw) {
   ];
 
   const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
-
-  // Normalise to 0..1 so the 12-spoke fallback is always readable
   const maxVal = Math.max(...vals, 1);
   const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
@@ -380,24 +372,16 @@ function makeSpiderChartUrl12(bandsRaw) {
         label: "",
         data: scaled,
         fill: true,
-        borderWidth: 3,
+        borderWidth: 0,
         pointRadius: 0,
-
-        // Curved/rounded line
-        tension: 0.30,
-        borderJoinStyle: "round",
-        capBezierPoints: true,
-
-        backgroundColor: "rgba(184, 15, 112, 0.20)",
-        borderColor: "rgba(66, 37, 135, 0.95)",
+        backgroundColor: "rgba(184, 15, 112, 0.35)",
       }],
     },
     options: {
       plugins: { legend: { display: false } },
       scales: {
         r: {
-          min: 0,
-          max: 1,
+          min: 0, max: 1,
           ticks: { display: false },
           grid: { display: false },
           angleLines: { display: false },
@@ -408,100 +392,7 @@ function makeSpiderChartUrl12(bandsRaw) {
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
-}
-
-/**
- * 8-spoke directional chart for users.
- *
- * Spokes (8):
- *   0:C, 1:C→T, 2:T, 3:T→R, 4:R, 5:R→L, 6:L, 7:L→C
- *
- * Labels shown:
- *   C, T, R, L only (transition spokes blank).
- *
- * Maths:
- *   Proportional drift (ties handled automatically):
- *   - low contributes toward previous transition spoke
- *   - mid contributes toward the state spoke
- *   - high contributes toward next transition spoke
- *
- * Rendering:
- *   Uses RAW magnitudes (no 0..1 normalisation), with r.max set dynamically,
- *   so the shape does not “blob” just because one value is large.
- */
-function makeSpiderChartUrl8Directional(bandsRaw) {
-  const n = (k) => Number(bandsRaw?.[k] || 0);
-
-  // 8 slots: 0:C, 1:CT, 2:T, 3:TR, 4:R, 5:RL, 6:L, 7:LC
-  const out = new Array(8).fill(0);
-
-  const addState = (stateKey, low, mid, high) => {
-    const total = low + mid + high;
-    if (total <= 0) return;
-
-    const stateIdx = { C: 0, T: 2, R: 4, L: 6 }[stateKey];
-    const prevIdx  = { C: 7, T: 1, R: 3, L: 5 }[stateKey]; // towards previous state
-    const nextIdx  = { C: 1, T: 3, R: 5, L: 7 }[stateKey]; // towards next state
-
-    // Proportional drift (ties auto-resolve because equal values yield equal proportions)
-    out[prevIdx]  += total * (low  / total);
-    out[stateIdx] += total * (mid  / total);
-    out[nextIdx]  += total * (high / total);
-  };
-
-  addState("C", n("C_low"), n("C_mid"), n("C_high"));
-  addState("T", n("T_low"), n("T_mid"), n("T_high"));
-  addState("R", n("R_low"), n("R_mid"), n("R_high"));
-  addState("L", n("L_low"), n("L_mid"), n("L_high"));
-
-  // Only label main states; transitions blank
-  const labels = ["C", "", "T", "", "R", "", "L", ""];
-
-  // Dynamic max with headroom so the shape is honest but not cramped
-  const maxVal = Math.max(...out, 1);
-  const rMax = Math.ceil(maxVal * 1.10 * 10) / 10; // +10% headroom, round to 0.1
-
-  const cfg = {
-    type: "radar",
-    data: {
-      labels,
-      datasets: [{
-        label: "",
-        data: out,
-        fill: true,
-        borderWidth: 4,
-        pointRadius: 0,
-
-        // Curved/rounded line (avoid “blob” overshoot)
-        tension: 0.25,
-        borderJoinStyle: "round",
-        capBezierPoints: true,
-
-        backgroundColor: "rgba(184, 15, 112, 0.22)",
-        borderColor: "rgba(66, 37, 135, 0.95)",
-      }],
-    },
-    options: {
-      plugins: { legend: { display: false } },
-      scales: {
-        r: {
-          min: 0,
-          max: rMax,
-          ticks: { display: false },
-          grid: { display: false },
-          angleLines: { display: false },
-          pointLabels: {
-            display: true,
-            font: { size: 20, weight: "bold" },
-          },
-        },
-      },
-    },
-  };
-
-  const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
 }
 
 async function embedRemoteImage(pdfDoc, url) {
@@ -516,7 +407,6 @@ async function embedRemoteImage(pdfDoc, url) {
   if (sig.startsWith("\x89PNG")) return await pdfDoc.embedPng(buf);
   if (sig.startsWith("\xff\xd8")) return await pdfDoc.embedJpg(buf);
 
-  // fallback
   try { return await pdfDoc.embedPng(buf); }
   catch { return await pdfDoc.embedJpg(buf); }
 }
@@ -525,17 +415,13 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   if (!pdfDoc || !page || !box) return;
 
   // Prefer explicit chart URL if provided
-  let url = String(chartUrl || "").trim();
-
+  let url = S(chartUrl).trim();
   if (!url) {
     const hasAny =
       bandsRaw && typeof bandsRaw === "object" &&
       Object.values(bandsRaw).some((v) => Number(v) > 0);
-
     if (!hasAny) return;
-
-    // Default for user-facing PDF: 8-spoke directional chart
-    url = makeSpiderChartUrl8Directional(bandsRaw);
+    url = makeSpiderChartUrl12(bandsRaw);
   }
 
   const img = await embedRemoteImage(pdfDoc, url);
@@ -544,7 +430,6 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   const H = page.getHeight();
   page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
 }
-
 
 /* ───────── default layout (supports your URL override scheme) ───────── */
 const DEFAULT_LAYOUT = {
@@ -796,23 +681,13 @@ function buildMasterProbe(P, domSecond) {
   const email = S(P.identity?.email || "");
   const dateLabel = S(P.identity?.dateLabel || P["p1:d"] || "");
 
-  // Prefer top-level P.bands, but fall back to ctrl.bands if present
-  const bands = (P && P.bands && typeof P.bands === "object") ? P.bands
-              : (P && P.ctrl && P.ctrl.bands && typeof P.ctrl.bands === "object") ? P.ctrl.bands
-              : {};
-
+  const bands = P.bands || {};
   const bandKeys = Object.keys(bands);
   const required12 = [
     "C_low","C_mid","C_high","T_low","T_mid","T_high",
     "R_low","R_mid","R_high","L_low","L_mid","L_high",
   ];
   const present12 = required12.filter((k) => bandKeys.includes(k)).length;
-
-  // Chart URLs (debug only): 8-spoke directional + 12-spoke raw fallback
-  let url8 = "";
-  let url12 = "";
-  try { url8 = makeSpiderChartUrl8Directional(bands); } catch (e) { url8 = ""; }
-  try { url12 = makeSpiderChartUrl12(bands); } catch (e) { url12 = ""; }
 
   const textKeys = 0
     + (P["p3:tldr"] ? 1 : 0) + (P["p3:main"] ? 1 : 0) + (P["p3:act"] ? 1 : 0)
@@ -859,12 +734,8 @@ function buildMasterProbe(P, domSecond) {
 
   return {
     ok: true,
-    where: "fill-template:v10:master_probe:summary",
+    where: "fill-template:v8:master_probe:summary",
     domSecond: safeJson(domSecond),
-
-    // ✅ new: chart URLs you can store in Sheets/Drive
-    chartUrls: { url8, url12 },
-
     identity: {
       fullName: { has: !!fullName, len: fullName.length, preview: fullName.slice(0, 40) },
       email: { has: !!email, len: email.length, preview: email.slice(0, 40) },
@@ -918,27 +789,15 @@ function buildMasterProbe(P, domSecond) {
   };
 }
 
-
 /* ───────── main handler ───────── */
 export default async function handler(req, res) {
   try {
     const url = new URL(req.url, "http://localhost");
     const debug = url.searchParams.get("debug") === "1";
 
-const payload = await readPayload(req);
-
-// ✅ schema freeze (add this)
-if (payload?.schemaVersion !== "poc.v1") {
-  return res.status(400).json({
-    ok: false,
-    error: "Invalid schemaVersion",
-    expected: "poc.v1",
-    received: payload?.schemaVersion ?? null,
-  });
-}
-
-const P = normaliseInput(payload);
-const domSecond = computeDomAndSecondKeys(P);
+    const payload = await readPayload(req);
+    const P = normaliseInput(payload);
+    const domSecond = computeDomAndSecondKeys(P);
 
     // Layout: default + payload overrides + URL overrides (full)
     let layout = deepMerge(DEFAULT_LAYOUT, P.layout || {});
@@ -1016,7 +875,7 @@ if (headerName) {
         try {
           await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p5chart.chart, P.bands || {}, P["p5:chartUrl"]);
         } catch (e) {
-          console.warn("[fill-template:v10] Radar chart skipped:", e?.message || String(e));
+          console.warn("[fill-template:v8] Radar chart skipped:", e?.message || String(e));
         }
       }
     }
@@ -1057,7 +916,7 @@ if (headerName) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:v10] CRASH", err);
+    console.error("[fill-template:v8] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
