@@ -1,5 +1,5 @@
 /**
- * CTRL PoC Export Service · fill-template (V8)
+ * CTRL PoC Export Service · fill-template (V9)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  *
  * Fixes in V8:
@@ -353,54 +353,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── radar chart embed (QuickChart) ───────── */
 
-/**
- * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
- * (Unchanged behaviour; kept stable.)
- */
-function makeSpiderChartUrl12(bandsRaw) {
-  const labels = [
-    "C_low","C_mid","C_high","T_low","T_mid","T_high",
-    "R_low","R_mid","R_high","L_low","L_mid","L_high",
-  ];
-
-  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
-  const maxVal = Math.max(...vals, 1);
-  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
-
-  const cfg = {
-    type: "radar",
-    data: {
-      labels,
-      datasets: [{
-        label: "",
-        data: scaled,
-        fill: true,
-/* ───────── radar chart embed (QuickChart) ───────── */
-
-/**
- * 12-spoke fallback (raw bands) — keep for storing in Sheets/Drive if needed.
- * (Unchanged behaviour; kept stable.)
- */
-function makeSpiderChartUrl12(bandsRaw) {
-  const labels = [
-    "C_low","C_mid","C_high","T_low","T_mid","T_high",
-    "R_low","R_mid","R_high","L_low","L_mid","L_high",
-  ];
-
-  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
-  const maxVal = Math.max(...vals, 1);
-  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
-
-  const cfg = {
-    type: "radar",
-    data: {
-      labels,
-      datasets: [{
-        label: "",
-        data: scaled,
-        fill: true,
 /* ───────── radar chart embed (QuickChart) ───────── */
 
 /**
@@ -427,9 +380,12 @@ function makeSpiderChartUrl12(bandsRaw) {
         fill: true,
         borderWidth: 3,
         pointRadius: 0,
-        tension: 0.35,                 // ✅ curved line
-        borderJoinStyle: "round",       // ✅ rounded corners
-        capBezierPoints: true,          // ✅ smoother curves
+
+        // Curved/rounded line
+        tension: 0.35,
+        borderJoinStyle: "round",
+        capBezierPoints: true,
+
         backgroundColor: "rgba(184, 15, 112, 0.25)",
         borderColor: "rgba(66, 37, 135, 0.95)",
       }],
@@ -442,28 +398,30 @@ function makeSpiderChartUrl12(bandsRaw) {
           ticks: { display: false },
           grid: { display: false },
           angleLines: { display: false },
-          pointLabels: { display: false }, // hidden in fallback view
+          pointLabels: { display: false },
         },
       },
     },
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  // ✅ force Chart.js v4 so "scales.r" works and ticks/grid truly hide
   return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
 }
 
 /**
- * 8-spoke directional chart for users:
- * Spokes: C, C→T, T, T→R, R, R→L, L, L→C
- * Labels show only: C, T, R, L (transition spokes blank)
+ * 8-spoke directional chart for users.
  *
- * IMPORTANT CHANGE:
- * ✅ Proportional drift, not winner-takes-all.
- * This naturally handles all ties:
- * - If low==mid==high, each gets 1/3 of total
- * - If two tie, they share proportionally (because values are equal)
- * - If one dominates, it receives the largest share (but not 100% unless others are 0)
+ * Spokes (8):
+ *   0:C, 1:C→T, 2:T, 3:T→R, 4:R, 5:R→L, 6:L, 7:L→C
+ *
+ * Labels shown:
+ *   C, T, R, L only (transition spokes blank).
+ *
+ * Maths:
+ *   Proportional drift (ties handled automatically):
+ *   - low contributes toward previous transition spoke
+ *   - mid contributes toward the state spoke
+ *   - high contributes toward next transition spoke
  */
 function makeSpiderChartUrl8Directional(bandsRaw) {
   const n = (k) => Number(bandsRaw?.[k] || 0);
@@ -479,7 +437,7 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
     const prevIdx  = { C: 7, T: 1, R: 3, L: 5 }[stateKey]; // towards previous state
     const nextIdx  = { C: 1, T: 3, R: 5, L: 7 }[stateKey]; // towards next state
 
-    // ✅ proportional drift (ties handled automatically)
+    // proportional drift (ties auto-resolve because equal values yield equal proportions)
     out[prevIdx]  += total * (low  / total);
     out[stateIdx] += total * (mid  / total);
     out[nextIdx]  += total * (high / total);
@@ -490,11 +448,10 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
   addState("R", n("R_low"), n("R_mid"), n("R_high"));
   addState("L", n("L_low"), n("L_mid"), n("L_high"));
 
-  // Labels: show only the 4 states
+  // Only label main states; transitions blank
   const labels = ["C", "", "T", "", "R", "", "L", ""];
 
-  // Keep raw magnitudes (0..max) so it feels like your screenshot scales (1,2,3 etc.)
-  // but we still normalise to 0..1 for chart fit.
+  // Normalise to 0..1 for stable rendering
   const maxVal = Math.max(...out, 1);
   const scaled = out.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
@@ -508,9 +465,12 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
         fill: true,
         borderWidth: 4,
         pointRadius: 0,
-        tension: 0.40,                 // ✅ curve like your example
-        borderJoinStyle: "round",       // ✅ rounded joints
-        capBezierPoints: true,          // ✅ smoother curves
+
+        // Curved/rounded line (like your example)
+        tension: 0.45,
+        borderJoinStyle: "round",
+        capBezierPoints: true,
+
         backgroundColor: "rgba(184, 15, 112, 0.22)",
         borderColor: "rgba(66, 37, 135, 0.95)",
       }],
@@ -533,7 +493,6 @@ function makeSpiderChartUrl8Directional(bandsRaw) {
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  // ✅ force Chart.js v4 so the config behaves consistently
   return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
 }
 
@@ -567,7 +526,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
 
     if (!hasAny) return;
 
-    // ✅ Default for user-facing PDF: 8-spoke directional chart
+    // Default for user-facing PDF: 8-spoke directional chart
     url = makeSpiderChartUrl8Directional(bandsRaw);
   }
 
