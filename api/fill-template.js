@@ -379,6 +379,9 @@ function makeSpiderChartUrl12(bandsRaw) {
       }],
     },
     options: {
+          // ✅ Rotate so the FIRST wedge is centred at North (top)
+    // -π/2 puts a divider at North; +π/12 shifts by half a wedge (15°) for 12 spokes
+      startAngle: -1.3089969389957472,
       plugins: { legend: { display: false } },
       scales: {
         r: {
@@ -387,7 +390,10 @@ function makeSpiderChartUrl12(bandsRaw) {
           ticks: { display: false },
           grid: { display: true },
           angleLines: { display: true },
-          pointLabels: { display: false }, // set true if you want labels on spokes
+          pointLabels: {
+  display: true,
+  font: { size: 12 }
+}
         },
       },
     },
