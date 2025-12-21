@@ -1,8 +1,8 @@
 /**
- * CTRL PoC Export Service · fill-template (V8)
+ * CTRL PoC Export Service · fill-template (V9)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  *
- * Fixes in V8:
+ * Fixes in V9:
  * 1) Output filename: PoC_Profile_{Firstname}_{Surname}_{Date}.pdf
  * 2) URL coordinate overrides (full) supported for ALL boxes (TLDR/main/action, etc.)
  * 3) Header on pages 2–10 becomes just "FullName" (by masking template header text)
@@ -355,12 +355,27 @@ function computeDomAndSecondKeys(P) {
 
 /* ───────── radar chart embed (QuickChart) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
-  const labels = [
-    "C_low","C_mid","C_high","T_low","T_mid","T_high",
-    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  // Order is fixed to match your scoring model
+  const keys = [
+    "C_low","C_mid","C_high",
+    "T_low","T_mid","T_high",
+    "R_low","R_mid","R_high",
+    "L_low","L_mid","L_high",
   ];
 
-  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
+  // ✅ Show only 4 axis labels (full names) on the "mid" spokes
+  // Chart.js radar requires a label per point; blanks hide the rest.
+  const labels = [
+    "", "Concealed", "",
+    "", "Triggered", "",
+    "", "Regulated", "",
+    "", "Lead", "",
+  ];
+
+  const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
+
+  // Keep the internal radar normalised to 0–1 for visual stability across users.
+  // (Your narrative + exact numbers still come from the raw bands.)
   const maxVal = Math.max(...vals, 1);
   const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
@@ -372,9 +387,16 @@ function makeSpiderChartUrl12(bandsRaw) {
         label: "",
         data: scaled,
         fill: true,
-        borderWidth: 0,
+
+        // ✅ clearer / bolder line
+        borderWidth: 4,
         pointRadius: 0,
-        backgroundColor: "rgba(184, 15, 112, 0.35)",
+
+        // basics (safer than curvy): set to 0 for straight edges
+        tension: 0,
+
+        backgroundColor: "rgba(184, 15, 112, 0.28)",
+        borderColor: "rgba(66, 37, 135, 0.95)",
       }],
     },
     options: {
@@ -383,18 +405,25 @@ function makeSpiderChartUrl12(bandsRaw) {
         r: {
           min: 0, max: 1,
           ticks: { display: false },
-          grid: { display: false },
-          angleLines: { display: false },
-          pointLabels: { display: false },
+
+          // keep a light frame so users can orient, but avoid clutter
+          grid: { display: true },
+          angleLines: { display: true },
+
+          // ✅ show only our 4 non-empty labels
+          pointLabels: {
+            display: true,
+            font: { size: 18, weight: "bold" },
+          },
         },
       },
     },
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+  // ✅ force Chart.js v4 so radar options behave consistently
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent&version=4`;
 }
-
 async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
 
