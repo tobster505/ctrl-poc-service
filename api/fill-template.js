@@ -394,7 +394,10 @@ function makeSpiderChartUrl12(bandsRaw) {
       datasets: [{
         data,
         backgroundColor: colours,
-        borderWidth: 0,
+
+        // ✅ wedge border (subtle)
+        borderWidth: 1,
+        borderColor: "rgba(0, 0, 0, 0.08)",
       }],
     },
     options: {
@@ -412,7 +415,10 @@ function makeSpiderChartUrl12(bandsRaw) {
           max: 1,
           ticks: { display: false },
           grid: { display: true },
-          angleLines: { display: true },
+
+          // ✅ removes the “divider line” look
+          angleLines: { display: false },
+
           pointLabels: {
             display: true,
             padding: 12,
@@ -426,6 +432,7 @@ function makeSpiderChartUrl12(bandsRaw) {
   const enc = encodeURIComponent(JSON.stringify(cfg));
   return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
 }
+
 
 
 
