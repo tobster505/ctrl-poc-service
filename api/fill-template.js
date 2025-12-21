@@ -399,26 +399,33 @@ function makeSpiderChartUrl12(bandsRaw) {
         borderColor: "rgba(66, 37, 135, 0.95)",
       }],
     },
-    options: {
-      plugins: { legend: { display: false } },
-      scales: {
-        r: {
-          min: 0, max: 1,
-          ticks: { display: false },
+options: {
+  plugins: { legend: { display: false } },
+  scales: {
+    r: {
+      min: 0,
+      max: 1,
 
-          // keep a light frame so users can orient, but avoid clutter
-          grid: { display: true },
-          angleLines: { display: true },
+      // ✅ lock the compass:
+      // first label = North (top). With labels ordered:
+      // ["Concealed","Triggered","Regulated","Lead"]
+      // you get N/E/S/W exactly.
+      startAngle: -90,
 
-          // ✅ show only our 4 non-empty labels
-          pointLabels: {
-            display: true,
-            font: { size: 18, weight: "bold" },
-          },
-        },
+      ticks: { display: false },
+
+      // keep a light frame so users can orient, but avoid clutter
+      grid: { display: true },
+      angleLines: { display: true },
+
+      pointLabels: {
+        display: true,
+        font: { size: 18, weight: "bold" },
       },
     },
-  };
+  },
+},
+
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
   // ✅ force Chart.js v4 so radar options behave consistently
