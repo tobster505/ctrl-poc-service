@@ -378,53 +378,55 @@ function makeSpiderChartUrl12(bandsRaw) {
   // Shade by state boundary (optional but helpful)
   const colours = keys.map((k) => {
     const s = k[0];
-    if (s === "C") return "rgba(184,  15, 112, 0.18)";
-    if (s === "T") return "rgba(184,  15, 112, 0.32)";
-    if (s === "R") return "rgba(184,  15, 112, 0.24)";
-    if (s === "L") return "rgba(184,  15, 112, 0.28)";
+    if (s === "C") return "rgba(184, 15, 112, 0.18)";
+    if (s === "T") return "rgba(184, 15, 112, 0.32)";
+    if (s === "R") return "rgba(184, 15, 112, 0.24)";
+    if (s === "L") return "rgba(184, 15, 112, 0.28)";
     return "rgba(184, 15, 112, 0.25)";
   });
+
+  const startAngle = -1.8325957145940461; // -Math.PI/2 - Math.PI/12  (centres first wedge at North)
 
   const cfg = {
     type: "polarArea",
     data: {
-      labels: displayLabels,     // ✅ what gets printed
+      labels: displayLabels,
       datasets: [{
         data,
         backgroundColor: colours,
         borderWidth: 0,
       }],
     },
-options: {
-  plugins: { legend: { display: false } },
+    options: {
+      plugins: { legend: { display: false } },
 
-  // ✅ rotate chart
-  startAngle: -1.8325957145940461, // -Math.PI/2 - Math.PI/12
+      // rotate chart so C_mid wedge is centred at top
+      startAngle,
 
-  scales: {
-    r: {
-      // ✅ ADD THIS (same value) — forces the radial scale to rotate too
-      startAngle: -1.8325957145940461,
+      scales: {
+        r: {
+          // belt + braces: some builds read it here
+          startAngle,
 
-      min: 0,
-      max: 1,
-      ticks: { display: false },
-      grid: { display: true },
-      angleLines: { display: true },
-
-      pointLabels: {
-        display: true,
-        padding: 12,
-        font: { size: 18, weight: "bold" },
+          min: 0,
+          max: 1,
+          ticks: { display: false },
+          grid: { display: true },
+          angleLines: { display: true },
+          pointLabels: {
+            display: true,
+            padding: 12,
+            font: { size: 18, weight: "bold" },
+          },
+        },
       },
     },
-  },
-},
-
+  };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
   return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
 }
+
 
 
 async function embedRemoteImage(pdfDoc, url) {
