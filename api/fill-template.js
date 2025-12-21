@@ -395,30 +395,32 @@ function makeSpiderChartUrl12(bandsRaw) {
         borderWidth: 0,
       }],
     },
-    options: {
-      plugins: { legend: { display: false } },
+options: {
+  plugins: { legend: { display: false } },
 
-      // ✅ 15° anticlockwise so the FIRST wedge (C_mid) is centred at North
-      startAngle: -1.8325957145940461, // -Math.PI/2 - Math.PI/12
+  // ✅ rotate chart
+  startAngle: -1.8325957145940461, // -Math.PI/2 - Math.PI/12
 
-      scales: {
-        r: {
-          min: 0,
-          max: 1,
-          ticks: { display: false },
-          grid: { display: true },
-          angleLines: { display: true },
+  scales: {
+    r: {
+      // ✅ ADD THIS (same value) — forces the radial scale to rotate too
+      startAngle: -1.8325957145940461,
 
-          // ✅ make the 4 labels bigger/bold
-          pointLabels: {
-            display: true,
-            padding: 12,
-            font: { size: 18, weight: "bold" },
-          },
-        },
+      min: 0,
+      max: 1,
+      ticks: { display: false },
+      grid: { display: true },
+      angleLines: { display: true },
+
+      pointLabels: {
+        display: true,
+        padding: 12,
+        font: { size: 18, weight: "bold" },
       },
     },
-  };
+  },
+},
+
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
   return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
