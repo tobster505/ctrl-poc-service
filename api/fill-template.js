@@ -670,11 +670,21 @@ function normaliseInput(d = {}) {
   const p4_main = S(text.domState || "");
   const p4_act  = S(text.state_tipact || "");
 
-  // Page 5: Frequency (plus chart)
-  const p5_tldr = formatTLDR(text.frequency_tldr || "");
-  const p5_main = S(text.frequency || "");
-  const p5_act  = S(text.frequency_tipact || ""); // optional
-  const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
+// Page 5: Frequency (plus chart)
+const p5_tldr = formatTLDR(text.frequency_tldr || "");
+const p5_main = S(text.frequency || "");
+
+// ✅ accept chartdesc as the Page 5 Action source (plus your existing key)
+const p5_act  = S(
+  text.chartdesc ||
+  text.chartDesc ||
+  text.chart_desc ||
+  text.frequency_tipact ||
+  ""
+);
+
+const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
+
 
   // Page 6: Sequence
   const p6_tldr = formatTLDR(text.sequence_tldr || "");
