@@ -356,17 +356,18 @@ function computeDomAndSecondKeys(P) {
 function makeSpiderChartUrl12(bandsRaw) {
   // Keys used to pull data (do NOT show these)
   const keys = [
-    "C_mid","C_high","T_low","T_mid","T_high",
+    "C_low","C_mid","C_high",
+    "T_low","T_mid","T_high",
     "R_low","R_mid","R_high",
     "L_low","L_mid","L_high",
-    "C_low",
   ];
 
   // Labels shown on the chart (only 4, rest blank)
   const displayLabels = [
-    "Concealed", "", "", "Triggered", "",
+    "", "Concealed", "",
+    "", "Triggered", "",
     "", "Regulated", "",
-    "", "Lead", "", ""
+    "", "Lead", ""
   ];
 
   const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
@@ -385,7 +386,10 @@ function makeSpiderChartUrl12(bandsRaw) {
     return "rgba(184, 15, 112, 0.25)";
   });
 
-  const startAngle = -1.8325957145940461; // -Math.PI/2 - Math.PI/12  (centres first wedge at North)
+  // ✅ Rotate so C_mid (index 1) is centred at North
+  // Formula: -π/2 - (wedge/2) - (index * wedge)
+  // wedge = 2π/12 = π/6, index=1 → startAngle = -3π/4
+  const startAngle = -2.356194490192345; // -3*Math.PI/4
 
   const cfg = {
     type: "polarArea",
@@ -394,35 +398,29 @@ function makeSpiderChartUrl12(bandsRaw) {
       datasets: [{
         data,
         backgroundColor: colours,
-
-        // ✅ wedge border (subtle)
         borderWidth: 1,
         borderColor: "rgba(0, 0, 0, 0.08)",
       }],
     },
     options: {
       plugins: { legend: { display: false } },
-
-      // rotate chart so C_mid wedge is centred at top
       startAngle,
-
       scales: {
         r: {
-          // belt + braces: some builds read it here
           startAngle,
-
           min: 0,
           max: 1,
           ticks: { display: false },
           grid: { display: true },
-
-          // ✅ removes the “divider line” look
           angleLines: { display: false },
 
           pointLabels: {
             display: true,
             padding: 12,
             font: { size: 18, weight: "bold" },
+
+            // ✅ This is what fixes “Concealed/Regulated” looking off-centre
+            centerPointLabels: true,
           },
         },
       },
