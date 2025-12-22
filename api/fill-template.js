@@ -604,10 +604,13 @@ function normaliseInput(d = {}) {
   const p3_main = S(text.execSummary || "");
   const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-  // Page 4: State deep-dive
-  const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
-  const p4_main = S(text.domState || "");
-  const p4_act  = S(text.state_tipact || "");
+// Page 4: State deep-dive
+const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
+const p4_dom  = S(text.domState || "");
+const p4_bot  = S(text.bottomState || "");
+const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
+const p4_act  = S(text.state_tipact || "");
+
 
   // Page 5: Frequency (plus chart)
   const p5_tldr = formatTLDR(text.frequency_tldr || "");
