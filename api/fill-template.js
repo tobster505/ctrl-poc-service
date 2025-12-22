@@ -1,15 +1,10 @@
 /**
- * CTRL PoC Export Service · fill-template (V8)
+ * CTRL PoC Export Service · fill-template (V9)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  *
- * Fixes in V8:
- * 1) Output filename: PoC_Profile_{Firstname}_{Surname}_{Date}.pdf
- * 2) URL coordinate overrides (full) supported for ALL boxes (TLDR/main/action, etc.)
- * 3) Header on pages 2–10 becomes just "FullName" (by masking template header text)
- * 4) Pages 3–7 render: TLDR (bold) + bullet lines + Main + Action (bold) + action paragraph
- * 5) Default align-left and URL overrideable width (w) so text stops falling off page
- * 6) Spider/radar chart embedded on Page 5 (from bands if chartUrl missing)
- * 7) Page 8 WorkWith blocks are 2x2 grid (not a single row)
+ * V9 changes:
+ * - Plugged in Toby’s supplied coordinates into DEFAULT_LAYOUT
+ * - Added p7_themesLow box + input mapping so it can render
  */
 export const config = { runtime: "nodejs" };
 
@@ -124,7 +119,6 @@ function wrapText(font, text, size, w) {
     if (line) lines.push(line);
   }
 
-  // trim trailing blanks
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
@@ -143,7 +137,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
 
   const pad = N(opts.pad ?? box.pad ?? 0);
 
-  // Optional: mask background (useful to overwrite template header text)
   if (opts.bg === true || box.bg === true) {
     page.drawRectangle({
       x,
@@ -177,7 +170,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   }
 }
 
-/* Bold label (first line), then wrapped body below */
 function drawLabelAndBody(page, fontB, font, label, body, box, bodyOpts = {}) {
   const L = norm(label);
   const B = S(body || "").replace(/\r/g, "").trim();
@@ -189,7 +181,6 @@ function drawLabelAndBody(page, fontB, font, label, body, box, bodyOpts = {}) {
   const pad = N(box.pad ?? 0);
   const maxLines = N(box.maxLines ?? 50);
 
-  // optional mask
   if (box.bg === true) {
     page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1), borderWidth: 0 });
   }
@@ -203,7 +194,6 @@ function drawLabelAndBody(page, fontB, font, label, body, box, bodyOpts = {}) {
   }
 
   if (B) {
-    // body box beneath label
     const bodyBox = {
       x: box.x,
       y: box.y + (L ? lineHeight : 0),
@@ -225,7 +215,6 @@ function formatTLDR(tldr) {
   const s = S(tldr).trim();
   if (!s) return "";
 
-  // If already multi-line, keep, but normalise bullets a bit
   if (s.includes("\n")) {
     return s
       .split("\n")
@@ -235,10 +224,8 @@ function formatTLDR(tldr) {
       .join("\n");
   }
 
-  // Split "• a • b • c" into lines
   const parts = s.split("•").map((x) => x.trim()).filter(Boolean);
   if (parts.length <= 1) {
-    // fallback: split by sentence-ish
     const guess = s.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean);
     return guess.map((x) => (x.startsWith("•") ? x : `• ${x}`)).join("\n");
   }
@@ -272,7 +259,7 @@ async function loadTemplateBytesLocal(fname) {
   );
 }
 
-/* ───────── payload parsing (GET ?data=... or POST JSON) ───────── */
+/* ───────── payload parsing ───────── */
 async function readPayload(req) {
   if (req.method === "POST") {
     const chunks = [];
@@ -355,7 +342,6 @@ function computeDomAndSecondKeys(P) {
 
 /* ───────── radar chart embed (QuickChart) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
-  // Keys used to pull data (do NOT show these)
   const keys = [
     "C_low","C_mid","C_high",
     "T_low","T_mid","T_high",
@@ -363,7 +349,6 @@ function makeSpiderChartUrl12(bandsRaw) {
     "L_low","L_mid","L_high",
   ];
 
-  // Labels shown on the chart (only 4, rest blank)
   const displayLabels = [
     "", "Concealed", "",
     "", "Triggered", "",
@@ -372,47 +357,40 @@ function makeSpiderChartUrl12(bandsRaw) {
   ];
 
   const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
-
-  // relative/shape scaling (as you had)
   const maxVal = Math.max(...vals, 1);
   const data = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
-// ✅ CTRL palette (Emerging → Developing → Established)
-const CTRL_COLOURS = {
-  C: { // Concealed — Warm Grey (Stone)
-    low:  "rgba(230, 228, 225, 0.55)", // #E6E4E1
-    mid:  "rgba(184, 180, 174, 0.55)", // #B8B4AE
-    high: "rgba(110, 106, 100, 0.55)", // #6E6A64
-  },
-  T: { // Triggered — Burnt Ochre
-    low:  "rgba(244, 225, 198, 0.55)", // #F4E1C6
-    mid:  "rgba(211, 155,  74, 0.55)", // #D39B4A
-    high: "rgba(154,  94,  26, 0.55)", // #9A5E1A
-  },
-  R: { // Regulated — Soft Sage
-    low:  "rgba(226, 236, 230, 0.55)", // #E2ECE6
-    mid:  "rgba(143, 183, 161, 0.55)", // #8FB7A1
-    high: "rgba( 79, 127, 105, 0.55)", // #4F7F69
-  },
-  L: { // Lead — Muted Aubergine
-    low:  "rgba(230, 220, 227, 0.55)", // #E6DCE3
-    mid:  "rgba(164, 135, 159, 0.55)", // #A4879F
-    high: "rgba( 94,  63,  90, 0.55)", // #5E3F5A
-  },
-};
+  const CTRL_COLOURS = {
+    C: {
+      low:  "rgba(230, 228, 225, 0.55)",
+      mid:  "rgba(184, 180, 174, 0.55)",
+      high: "rgba(110, 106, 100, 0.55)",
+    },
+    T: {
+      low:  "rgba(244, 225, 198, 0.55)",
+      mid:  "rgba(211, 155,  74, 0.55)",
+      high: "rgba(154,  94,  26, 0.55)",
+    },
+    R: {
+      low:  "rgba(226, 236, 230, 0.55)",
+      mid:  "rgba(143, 183, 161, 0.55)",
+      high: "rgba( 79, 127, 105, 0.55)",
+    },
+    L: {
+      low:  "rgba(230, 220, 227, 0.55)",
+      mid:  "rgba(164, 135, 159, 0.55)",
+      high: "rgba( 94,  63,  90, 0.55)",
+    },
+  };
 
-// ✅ assign a colour to each wedge based on key suffix (_low/_mid/_high)
-const colours = keys.map((k) => {
-  const state = k[0];                 // C / T / R / L
-  const tier = k.split("_")[1];       // low / mid / high
-  return CTRL_COLOURS[state]?.[tier] || "rgba(0,0,0,0.10)";
-});
+  const colours = keys.map((k) => {
+    const state = k[0];
+    const tier = k.split("_")[1];
+    return CTRL_COLOURS[state]?.[tier] || "rgba(0,0,0,0.10)";
+  });
 
-
-  // ✅ Rotate so C_mid (index 1) is centred at North
-  // Formula: -π/2 - (wedge/2) - (index * wedge)
-  // wedge = 2π/12 = π/6, index=1 → startAngle = -3π/4
-  const startAngle = -2.356194490192345; // -3*Math.PI/4
+  // rotate so the labels sit at 45 degrees (your latest preferred look)
+  const startAngle = -Math.PI / 4;
 
   const cfg = {
     type: "polarArea",
@@ -436,13 +414,10 @@ const colours = keys.map((k) => {
           ticks: { display: false },
           grid: { display: true },
           angleLines: { display: false },
-
           pointLabels: {
             display: true,
             padding: 14,
-            font: { size: 24, weight: "bold" },
-
-            // ✅ This is what fixes “Concealed/Regulated” looking off-centre
+            font: { size: 26, weight: "bold" }, // bigger labels (you asked)
             centerPointLabels: true,
           },
         },
@@ -453,7 +428,6 @@ const colours = keys.map((k) => {
   const enc = encodeURIComponent(JSON.stringify(cfg));
   return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
 }
-
 
 async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
@@ -474,7 +448,6 @@ async function embedRemoteImage(pdfDoc, url) {
 async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   if (!pdfDoc || !page || !box) return;
 
-  // Prefer explicit chart URL if provided
   let url = S(chartUrl).trim();
   if (!url) {
     const hasAny =
@@ -491,57 +464,70 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
 }
 
-/* ───────── default layout (supports your URL override scheme) ───────── */
+/* ───────── DEFAULT LAYOUT (V9: your coordinates) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
-      name: { x: 7, y: 473, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
-      date: { x: 210, y: 600, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
+      name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
+      date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Header name on pages 2–10 (mask template header and write just the name)
-    p2:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p3:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p4:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p5:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p6:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p7:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p8:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p9:  { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
-    p10: { hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1} },
+    // Header name on pages 2–10
+    p2:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p3:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p4:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p5:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p6:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p7:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p8:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p9:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p10: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Pages 3–7: split boxes (TLDR / main / action) to match your coordinate file format
+    // Page 3
     p3TLDR: { domDesc: { x: 25, y: 310, w: 550, h: 210, size: 15, align: "left", maxLines: 10 } },
-    p3main: { domDesc: { x: 25, y: 450, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
+    p3main: { domDesc: { x: 25, y: 515, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
     p3act:  { domDesc: { x: 25, y: 700, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
 
-    p4TLDR: { spider: { x: 25, y: 160, w: 550, h: 220, size: 15, align: "left", maxLines: 10 } },
-    p4main: { spider: { x: 25, y: 340, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
-    p4act:  { spider: { x: 25, y: 630, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
+    // Page 4
+    p4TLDR: { spider: { x: 25, y: 160, w: 550, h: 220, size: 14, align: "left", maxLines: 10 } },
+    p4main: { spider: { x: 25, y: 330, w: 550, h: 520, size: 14, align: "left", maxLines: 26 } },
+    p4act:  { spider: { x: 25, y: 650, w: 550, h: 140, size: 14, align: "left", maxLines: 8 } },
 
-    p5TLDR: { seqpat: { x: 25, y: 170, w: 210, h: 220, size: 14, align: "left", maxLines: 10 } },
-    p5main: { seqpat: { x: 25, y: 340, w: 210, h: 430, size: 14, align: "left", maxLines: 22 } },
-    p5act:  { seqpat: { x: 25, y: 710, w: 210, h: 140, size: 14, align: "left", maxLines: 8 } },
-    p5chart:{ chart:  { x: 300, y: 320, w: 320, h: 320 } },
+    // Page 5 (text + chart)
+    p5TLDR: { seqpat: { x: 25, y: 170, w: 170, h: 220, size: 15, align: "left", maxLines: 10 } },
+    p5main: { seqpat: { x: 25, y: 530, w: 550, h: 520, size: 15, align: "left", maxLines: 28 } },
+    p5act:  { seqpat: { x: 25, y: 680, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
+    p5chart:{ chart:  { x: 250, y: 160, w: 320, h: 320 } },
 
-    p6TLDR: { themeExpl: { x: 25, y: 170, w: 550, h: 220, size: 15, align: "left", maxLines: 10 } },
-    p6main: { themeExpl: { x: 25, y: 340, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
-    p6act:  { themeExpl: { x: 25, y: 630, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
+    // Page 6
+    p6TLDR: { themeExpl: { x: 25, y: 160, w: 550, h: 220, size: 16, align: "left", maxLines: 10 } },
+    p6main: { themeExpl: { x: 25, y: 300, w: 550, h: 520, size: 16, align: "left", maxLines: 26 } },
+    p6act:  { themeExpl: { x: 25, y: 560, w: 550, h: 140, size: 16, align: "left", maxLines: 8 } },
 
-    p7TLDR: { themesTop: { x: 30, y: 170, w: 590, h: 220, size: 15, align: "left", maxLines: 10 } },
-    p7main: { themesTop: { x: 30, y: 340, w: 590, h: 520, size: 15, align: "left", maxLines: 26 } },
-    p7act:  { themesTop: { x: 30, y: 630, w: 590, h: 140, size: 15, align: "left", maxLines: 8 } },
+    // Page 7
+    p7TLDR: { themesTop: { x: 30, y: 280, w: 550, h: 220, size: 16, align: "left", maxLines: 10 } },
+    p7main: { themesTop: { x: 30, y: 430, w: 550, h: 520, size: 16, align: "left", maxLines: 26 } },
+    p7act:  { themesTop: { x: 30, y: 660, w: 550, h: 140, size: 16, align: "left", maxLines: 8 } },
+
+    // ✅ new: themesLow (right column)
+    p7: {
+      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      themesLow: { x: 320, y: 210, w: 290, h: 900, size: 15, align: "left", maxLines: 28 },
+    },
 
     // Page 8: 2x2 grid
     p8grid: {
-      collabC: { x: 30,  y: 200, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 200, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabR: { x: 30,  y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabL: { x: 320, y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
+      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabR: { x: 30,  y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // Page 9 (action anchor)
-    p9: { actAnchor: { x: 25, y: 200, w: 550, h: 220, size: 20, align: "left", maxLines: 8 } },
+    // Page 9: Action anchor
+    p9: {
+      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      actAnchor: { x: 25, y: 300, w: 550, h: 220, size: 16, align: "left", maxLines: 8 },
+    },
   },
 };
 
@@ -561,12 +547,7 @@ function deepMerge(target, source) {
   return out;
 }
 
-/* ───────── URL-driven layout overrides ─────────
-   Supports your exact pattern:
-   L_p3TLDR_domDesc_x=...
-   L_p3main_domDesc_w=...
-   L_p5chart_chart_x=...
-*/
+/* ───────── URL-driven layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layout, url) {
   if (!layout || !layout.pages || !url || !url.searchParams) return { layout, applied: [], ignored: [] };
 
@@ -579,7 +560,7 @@ function applyLayoutOverridesFromUrl(layout, url) {
   for (const [k, v] of url.searchParams.entries()) {
     if (!k.startsWith("L_")) continue;
 
-    const bits = k.split("_"); // L_p3TLDR_domDesc_y
+    const bits = k.split("_");
     if (bits.length < 4) { ignored.push({ k, v, why: "bits<4" }); continue; }
 
     const pageKey = bits[1];
@@ -617,7 +598,7 @@ function applyLayoutOverridesFromUrl(layout, url) {
   return { layout, applied, ignored };
 }
 
-/* ───────── input normaliser (matches your current payload shape) ───────── */
+/* ───────── input normaliser ───────── */
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const text = d.text || {};
@@ -637,7 +618,6 @@ function normaliseInput(d = {}) {
   const email = identity.email || d.email || "";
   const dateLbl = d.dateLbl || d.date || d["p1:d"] || (d.meta && d.meta.dateLbl) || "";
 
-  // Bands (12)
   const ctrlBands = (ctrl.bands && typeof ctrl.bands === "object") ? ctrl.bands : null;
   const sumBands  = (summary.bands && typeof summary.bands === "object") ? summary.bands : null;
   const ctrl12    = (summary.ctrl12 && typeof summary.ctrl12 === "object") ? summary.ctrl12 : null;
@@ -650,7 +630,6 @@ function normaliseInput(d = {}) {
     (rootBands && Object.keys(rootBands).length ? rootBands : null) ||
     {};
 
-  // Key pieces
   const domState =
     d.domState ||
     ctrl.dominant ||
@@ -659,42 +638,42 @@ function normaliseInput(d = {}) {
     d["p3:dom"] ||
     "";
 
-  // Page 3: Exec
+  // p3
   const p3_tldr = formatTLDR(text.execSummary_tldr || "");
   const p3_main = S(text.execSummary || "");
   const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-// Page 4: State deep-dive
-const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
-const p4_dom  = S(text.domState || "");
-const p4_bot  = S(text.bottomState || "");
-const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
-const p4_act  = S(text.state_tipact || "");
+  // p4
+  const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
+  const p4_dom  = S(text.domState || "");
+  const p4_bot  = S(text.bottomState || "");
+  const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
+  const p4_act  = S(text.state_tipact || "");
 
-
-  // Page 5: Frequency (plus chart)
+  // p5
   const p5_tldr = formatTLDR(text.frequency_tldr || "");
   const p5_main = S(text.frequency || "");
-  const p5_act  = S(text.frequency_tipact || ""); // optional
+  const p5_act  = S(text.frequency_tipact || "");
   const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
 
-  // Page 6: Sequence
+  // p6
   const p6_tldr = formatTLDR(text.sequence_tldr || "");
   const p6_main = S(text.sequence || "");
   const p6_act  = S(text.sequence_tipact || "");
 
-  // Page 7: Themes (single block)
+  // p7
   const p7_tldr = formatTLDR(text.theme_tldr || text.themesTop_tldr || "");
   const p7_main = S(text.theme || text.themesTop || "");
   const p7_act  = S(text.theme_tipact || text.themesTop_tip || "");
+  const p7_low  = S(text.themesLow || text.themeLow || text.themes_low || ""); // ✅ wired for your new p7_themesLow coords
 
-  // Page 8: WorkWith blocks
+  // p8
   const p8C = S(workWith.concealed || "");
   const p8T = S(workWith.triggered || "");
   const p8R = S(workWith.regulated || "");
   const p8L = S(workWith.lead || "");
 
-  // Page 9: Action anchor
+  // p9
   const p9_anchor = S(text.act_anchor || text.action_anchor || "");
 
   return {
@@ -728,6 +707,7 @@ const p4_act  = S(text.state_tipact || "");
     "p7:tldr": p7_tldr,
     "p7:main": p7_main,
     "p7:act":  p7_act,
+    "p7:low":  p7_low,
 
     "p8:C": p8C,
     "p8:T": p8T,
@@ -738,7 +718,7 @@ const p4_act  = S(text.state_tipact || "");
   };
 }
 
-/* ───────── master probe summary (like your current debug output) ───────── */
+/* ───────── probe summary (unchanged) ───────── */
 function buildMasterProbe(P, domSecond) {
   const fullName = S(P.identity?.fullName || "");
   const email = S(P.identity?.email || "");
@@ -758,6 +738,7 @@ function buildMasterProbe(P, domSecond) {
     + (P["p5:tldr"] ? 1 : 0) + (P["p5:main"] ? 1 : 0) + (P["p5:act"] ? 1 : 0)
     + (P["p6:tldr"] ? 1 : 0) + (P["p6:main"] ? 1 : 0) + (P["p6:act"] ? 1 : 0)
     + (P["p7:tldr"] ? 1 : 0) + (P["p7:main"] ? 1 : 0) + (P["p7:act"] ? 1 : 0)
+    + (P["p7:low"] ? 1 : 0)
     + (P["p9:anchor"] ? 1 : 0);
 
   const workWithKeys = 0
@@ -766,12 +747,7 @@ function buildMasterProbe(P, domSecond) {
     + (P["p8:R"] ? 1 : 0)
     + (P["p8:L"] ? 1 : 0);
 
-  const missing = {
-    identity: [],
-    ctrl: [],
-    text: [],
-    workWith: [],
-  };
+  const missing = { identity: [], ctrl: [], text: [], workWith: [] };
 
   if (!fullName.trim()) missing.identity.push("identity.fullName");
   if (!email.trim()) missing.identity.push("identity.email");
@@ -781,10 +757,9 @@ function buildMasterProbe(P, domSecond) {
   if (!domSecond?.secondKey) missing.ctrl.push("ctrl.summary.secondKey");
   if (!domSecond?.templateKey) missing.ctrl.push("ctrl.summary.templateKey");
 
-  // minimal checks
   if (!P["p3:tldr"]) missing.text.push("text.execSummary_tldr");
   if (!P["p3:main"]) missing.text.push("text.execSummary");
-  if (!P["p3:act"]) missing.text.push("text.execSummary_tipact");
+  if (!P["p3:act"])  missing.text.push("text.execSummary_tipact");
 
   if (!P["p5:main"]) missing.text.push("text.frequency");
   if (!P["p6:main"]) missing.text.push("text.sequence");
@@ -797,7 +772,7 @@ function buildMasterProbe(P, domSecond) {
 
   return {
     ok: true,
-    where: "fill-template:v8:master_probe:summary",
+    where: "fill-template:v9:master_probe:summary",
     domSecond: safeJson(domSecond),
     identity: {
       fullName: { has: !!fullName, len: fullName.length, preview: fullName.slice(0, 40) },
@@ -805,50 +780,14 @@ function buildMasterProbe(P, domSecond) {
       dateLabel: { has: !!dateLabel, len: dateLabel.length, preview: dateLabel.slice(0, 40) },
     },
     counts: {
-      questions: 0,               // (kept to match your existing probe schema)
+      questions: 0,
       bandsKeys: bandKeys.length,
       bandsPresent12: present12,
       textKeys,
       workWithKeys,
       freqTldrExtraKeys: [],
     },
-    lengths: {
-      p3_tldr: (P["p3:tldr"] || "").length,
-      p3_main: (P["p3:main"] || "").length,
-      p3_act:  (P["p3:act"]  || "").length,
-
-      p4_tldr: (P["p4:tldr"] || "").length,
-      p4_main: (P["p4:main"] || "").length,
-      p4_act:  (P["p4:act"]  || "").length,
-
-      p5_tldr: (P["p5:tldr"] || "").length,
-      p5_main: (P["p5:main"] || "").length,
-      p5_act:  (P["p5:act"]  || "").length,
-
-      p6_tldr: (P["p6:tldr"] || "").length,
-      p6_main: (P["p6:main"] || "").length,
-      p6_act:  (P["p6:act"]  || "").length,
-
-      p7_tldr: (P["p7:tldr"] || "").length,
-      p7_main: (P["p7:main"] || "").length,
-      p7_act:  (P["p7:act"]  || "").length,
-
-      p9_anchor: (P["p9:anchor"] || "").length,
-      bandsKeys: bandKeys.length,
-      bandsPresent12: present12,
-      freqTldrExtraKeys: 0,
-    },
     missing,
-    previews: {
-      execSummary_tldr: (P["p3:tldr"] || "").slice(0, 140),
-      execSummary: (P["p3:main"] || "").slice(0, 140),
-      frequency_tldr: (P["p5:tldr"] || "").slice(0, 140),
-      frequency: (P["p5:main"] || "").slice(0, 140),
-      sequence_tldr: (P["p6:tldr"] || "").slice(0, 140),
-      theme_tldr: (P["p7:tldr"] || "").slice(0, 140),
-      act_anchor: (P["p9:anchor"] || "").slice(0, 140),
-      workWith_triggered: (P["p8:T"] || "").slice(0, 140),
-    },
   };
 }
 
@@ -862,20 +801,17 @@ export default async function handler(req, res) {
     const P = normaliseInput(payload);
     const domSecond = computeDomAndSecondKeys(P);
 
-    // Layout: default + payload overrides + URL overrides (full)
     let layout = deepMerge(DEFAULT_LAYOUT, P.layout || {});
     const { layout: layout2, applied, ignored } = applyLayoutOverridesFromUrl(layout, url);
     layout = layout2;
     const L = layout.pages || DEFAULT_LAYOUT.pages;
 
     if (debug) {
-      // include applied/ignored overrides so you can see why coords "did not move"
       const probe = buildMasterProbe(P, domSecond);
       probe.layoutOverrides = { applied, ignored };
       return res.status(200).json(probe);
     }
 
-    // Template resolve
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
     const tpl = `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`;
@@ -888,24 +824,22 @@ export default async function handler(req, res) {
 
     const pages = pdfDoc.getPages();
 
-    // p1 (cover): name + date
+    // p1
     if (pages[0] && L.p1) {
       if (L.p1.name && P["p1:n"]) drawTextBox(pages[0], fontB, P["p1:n"], L.p1.name, { maxLines: 1 });
       if (L.p1.date && P["p1:d"]) drawTextBox(pages[0], font,  P["p1:d"], L.p1.date, { maxLines: 1 });
     }
 
-// Header (pages 2–10): write just FullName
-const headerName = norm(P["p1:n"]);
-if (headerName) {
-  for (let i = 1; i < pages.length; i++) {
-    const pk = `p${i + 1}`;
-    const box = L?.[pk]?.hdrName;
-    if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
-  }
-}
+    // headers p2–p10
+    const headerName = norm(P["p1:n"]);
+    if (headerName) {
+      for (let i = 1; i < pages.length; i++) {
+        const pk = `p${i + 1}`;
+        const box = L?.[pk]?.hdrName;
+        if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
+      }
+    }
 
-
-    // Index mapping (template is 10 pages: 1..10 => 0..9)
     const p3 = pages[2] || null;
     const p4 = pages[3] || null;
     const p5 = pages[4] || null;
@@ -914,21 +848,18 @@ if (headerName) {
     const p8 = pages[7] || null;
     const p9 = pages[8] || null;
 
-    // Page 3 — TLDR / Main / Action
     if (p3) {
       if (L.p3TLDR?.domDesc) drawLabelAndBody(p3, fontB, font, "TLDR",  P["p3:tldr"], L.p3TLDR.domDesc);
       if (L.p3main?.domDesc) drawLabelAndBody(p3, fontB, font, "",      P["p3:main"], L.p3main.domDesc);
       if (L.p3act?.domDesc)  drawLabelAndBody(p3, fontB, font, "Action", P["p3:act"],  L.p3act.domDesc);
     }
 
-    // Page 4 — TLDR / Main / Action
     if (p4) {
       if (L.p4TLDR?.spider) drawLabelAndBody(p4, fontB, font, "TLDR",  P["p4:tldr"], L.p4TLDR.spider);
       if (L.p4main?.spider) drawLabelAndBody(p4, fontB, font, "",      P["p4:main"], L.p4main.spider);
       if (L.p4act?.spider)  drawLabelAndBody(p4, fontB, font, "Action", P["p4:act"],  L.p4act.spider);
     }
 
-    // Page 5 — TLDR / Main / Action + radar chart
     if (p5) {
       if (L.p5TLDR?.seqpat) drawLabelAndBody(p5, fontB, font, "TLDR",  P["p5:tldr"], L.p5TLDR.seqpat);
       if (L.p5main?.seqpat) drawLabelAndBody(p5, fontB, font, "",      P["p5:main"], L.p5main.seqpat);
@@ -938,26 +869,28 @@ if (headerName) {
         try {
           await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p5chart.chart, P.bands || {}, P["p5:chartUrl"]);
         } catch (e) {
-          console.warn("[fill-template:v8] Radar chart skipped:", e?.message || String(e));
+          console.warn("[fill-template:v9] Radar chart skipped:", e?.message || String(e));
         }
       }
     }
 
-    // Page 6 — TLDR / Main / Action
     if (p6) {
       if (L.p6TLDR?.themeExpl) drawLabelAndBody(p6, fontB, font, "TLDR",  P["p6:tldr"], L.p6TLDR.themeExpl);
       if (L.p6main?.themeExpl) drawLabelAndBody(p6, fontB, font, "",      P["p6:main"], L.p6main.themeExpl);
       if (L.p6act?.themeExpl)  drawLabelAndBody(p6, fontB, font, "Action", P["p6:act"],  L.p6act.themeExpl);
     }
 
-    // Page 7 — TLDR / Main / Action (single theme block)
     if (p7) {
       if (L.p7TLDR?.themesTop) drawLabelAndBody(p7, fontB, font, "TLDR",  P["p7:tldr"], L.p7TLDR.themesTop);
       if (L.p7main?.themesTop) drawLabelAndBody(p7, fontB, font, "",      P["p7:main"], L.p7main.themesTop);
       if (L.p7act?.themesTop)  drawLabelAndBody(p7, fontB, font, "Action", P["p7:act"],  L.p7act.themesTop);
+
+      // ✅ themesLow right column (if provided)
+      if (L.p7?.themesLow && P["p7:low"]) {
+        drawTextBox(p7, font, P["p7:low"], L.p7.themesLow, { maxLines: L.p7.themesLow.maxLines });
+      }
     }
 
-    // Page 8 — WorkWith 2x2 grid
     if (p8 && L.p8grid) {
       if (L.p8grid.collabC && P["p8:C"]) drawTextBox(p8, font, P["p8:C"], L.p8grid.collabC, { maxLines: L.p8grid.collabC.maxLines });
       if (L.p8grid.collabT && P["p8:T"]) drawTextBox(p8, font, P["p8:T"], L.p8grid.collabT, { maxLines: L.p8grid.collabT.maxLines });
@@ -965,21 +898,19 @@ if (headerName) {
       if (L.p8grid.collabL && P["p8:L"]) drawTextBox(p8, font, P["p8:L"], L.p8grid.collabL, { maxLines: L.p8grid.collabL.maxLines });
     }
 
-    // Page 9 — Action anchor
     if (p9 && L.p9?.actAnchor && P["p9:anchor"]) {
       drawTextBox(p9, font, P["p9:anchor"], L.p9.actAnchor, { maxLines: L.p9.actAnchor.maxLines });
     }
 
     const outBytes = await pdfDoc.save();
 
-    // Filename fix
     const outName = makeOutputFilename(P["p1:n"], P["p1:d"]);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:v8] CRASH", err);
+    console.error("[fill-template:v9] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
