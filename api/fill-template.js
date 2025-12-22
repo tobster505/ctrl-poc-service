@@ -643,12 +643,32 @@ function normaliseInput(d = {}) {
   const p3_main = S(text.execSummary || "");
   const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-  // p4
-  const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
-  const p4_dom  = S(text.domState || "");
-  const p4_bot  = S(text.bottomState || "");
-  const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
-  const p4_act  = S(text.state_tipact || "");
+// p4 (Option B: Dom + Top3 + Bottom3 as separate fields)
+const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
+
+const p4_dom = S(text.domState || "");
+
+const p4_top3 = S(
+  text.top3State ||
+  text.top3States ||
+  text.top3SubStates ||
+  ""
+);
+
+const p4_bottom3 = S(
+  text.bottom3State ||
+  text.bottom3States ||
+  text.bottom3SubStates ||
+  text.bottomState || // legacy fallback
+  ""
+);
+
+const p4_main = [p4_dom, p4_top3, p4_bottom3]
+  .map((v) => S(v).trim())
+  .filter(Boolean)
+  .join("\n\n");
+
+const p4_act = S(text.state_tipact || "");
 
   // p5
   const p5_tldr = formatTLDR(text.frequency_tldr || "");
@@ -858,6 +878,8 @@ export default async function handler(req, res) {
       if (L.p4TLDR?.spider) drawLabelAndBody(p4, fontB, font, "TLDR",  P["p4:tldr"], L.p4TLDR.spider);
       if (L.p4main?.spider) drawLabelAndBody(p4, fontB, font, "",      P["p4:main"], L.p4main.spider);
       if (L.p4act?.spider)  drawLabelAndBody(p4, fontB, font, "Action", P["p4:act"],  L.p4act.spider);
+      if (!P["p4:main"]) missing.text.push("text.domState + text.top3State + text.bottom3State (combined p4:main)");
+
     }
 
     if (p5) {
