@@ -353,6 +353,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
+/* ───────── radar chart embed (QuickChart) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   // Keys used to pull data (do NOT show these)
   const keys = [
@@ -454,8 +455,6 @@ const colours = keys.map((k) => {
 }
 
 
-
-
 async function embedRemoteImage(pdfDoc, url) {
   if (!url) return null;
 
@@ -476,7 +475,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   if (!pdfDoc || !page || !box) return;
 
   // Prefer explicit chart URL if provided
-  let url = String(chartUrl || "").trim();
+  let url = S(chartUrl).trim();
   if (!url) {
     const hasAny =
       bandsRaw && typeof bandsRaw === "object" &&
@@ -541,11 +540,8 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
     },
 
-   // Page 9 (action anchor)
-   p9: {
-     hdrName: { x: 360, y: 44, w: 520, h: 34, size: 13, align: "left", maxLines: 1 },
-     actAnchor: { x: 55, y: 760, w: 950, h: 180, size: 20, align: "left", maxLines: 8 },
-   },
+    // Page 9 (action anchor)
+    p9: { actAnchor: { x: 25, y: 200, w: 550, h: 220, size: 20, align: "left", maxLines: 8 } },
   },
 };
 
@@ -668,26 +664,19 @@ function normaliseInput(d = {}) {
   const p3_main = S(text.execSummary || "");
   const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-  // Page 4: State deep-dive
-  const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
-  const p4_main = S(text.domState || "");
-  const p4_act  = S(text.state_tipact || "");
+// Page 4: State deep-dive
+const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
+const p4_dom  = S(text.domState || "");
+const p4_bot  = S(text.bottomState || "");
+const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
+const p4_act  = S(text.state_tipact || "");
 
-// Page 5: Frequency (plus chart)
-const p5_tldr = formatTLDR(text.frequency_tldr || "");
-const p5_main = S(text.frequency || "");
 
-// ✅ accept chartdesc as the Page 5 Action source (plus your existing key)
-const p5_act  = S(
-  text.chartdesc ||
-  text.chartDesc ||
-  text.chart_desc ||
-  text.frequency_tipact ||
-  ""
-);
-
-const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
-
+  // Page 5: Frequency (plus chart)
+  const p5_tldr = formatTLDR(text.frequency_tldr || "");
+  const p5_main = S(text.frequency || "");
+  const p5_act  = S(text.frequency_tipact || ""); // optional
+  const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
 
   // Page 6: Sequence
   const p6_tldr = formatTLDR(text.sequence_tldr || "");
