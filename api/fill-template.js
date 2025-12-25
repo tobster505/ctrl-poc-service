@@ -1,12 +1,17 @@
 /**
- * CTRL PoC Export Service · fill-template (V11)
+ * CTRL PoC Export Service · fill-template (V11.1)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
  *
- * V11 changes vs V9:
- * - Keeps V9 working template loader + rendering pipeline
- * - Updates input mapping to match current Botpress payload
- * - Page 9 now renders 4 actions: text.act_1..act_4 (no more anchor required)
- * - Backwards compatible: if act_anchor exists, it will still render (fallback)
+ * Fix:
+ * - Template selection now uses payload.ctrl.templateKey (e.g., "TR") to load:
+ *   CTRL_PoC_Assessment_Profile_template_TR.pdf
+ * - Fallback template is:
+ *   CTRL_PoC_Assessment_Profile_template_fallback.pdf
+ *
+ * Notes:
+ * - Keeps V11 mapping + rendering pipeline
+ * - Page 9 renders 4 actions: text.act_1..act_4
+ * - Legacy anchor still supported as a fallback render path, but not required
  */
 
 export const config = { runtime: "nodejs" };
@@ -110,7 +115,7 @@ function formatTLDR(tldr) {
   return parts.map((x) => `• ${x}`).join("\n");
 }
 
-/* ───────── template loader (V9 style) ───────── */
+/* ───────── template loader (local /public search) ───────── */
 async function loadTemplateBytesLocal(fname) {
   if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
 
@@ -135,6 +140,27 @@ async function loadTemplateBytesLocal(fname) {
   throw new Error(
     `Template not found: ${fname}. Tried: ${candidates.join(" | ")}. Last: ${lastErr?.message || "no detail"}`
   );
+}
+
+/* ───────── template selection (12 variants + fallback) ───────── */
+function pickTemplateFilename(payload) {
+  const FALLBACK = "CTRL_PoC_Assessment_Profile_template_fallback.pdf";
+
+  // Allow direct override if you pass the full filename in payload
+  const direct = String(payload?.tpl || payload?.template || payload?.pdfTpl || "").trim();
+  if (direct) return direct.endsWith(".pdf") ? direct : (direct + ".pdf");
+
+  const allowed = new Set(["CL","CT","CR","LC","LR","LT","RC","RL","RT","TC","TL","TR"]);
+
+  const keyRaw = String(payload?.ctrl?.templateKey || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const key = keyRaw.slice(0, 2); // safety
+
+  if (allowed.has(key)) {
+    return `CTRL_PoC_Assessment_Profile_template_${key}.pdf`;
+  }
+
+  // Soft fallback (your preference)
+  return FALLBACK;
 }
 
 /* ───────── drawing helpers ───────── */
@@ -205,7 +231,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
       if (cursorY < y + pad) return;
     }
 
-    // Paragraph gap (small)
     if (p < paragraphs.length - 1) {
       cursorY -= Math.max(0, lineGap);
       if (cursorY < y + pad) return;
@@ -253,9 +278,8 @@ function drawLabelAndBody(page, fontB, font, label, body, box, bodyOpts = {}) {
   }
 }
 
-/* ───────── chart (kept as V9) ───────── */
+/* ───────── chart (kept as V11) ───────── */
 function makeSpiderChartUrl12(bands) {
-  // NOTE: kept exactly as V9 (including bigger labels + rotation)
   const labels = [
     "C_low","C_mid","C_high",
     "T_low","T_mid","T_high",
@@ -276,7 +300,6 @@ function makeSpiderChartUrl12(bands) {
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
   });
 
-  // v9 colour set (kept)
   const colours = [
     "rgba(180, 180, 180, 0.75)","rgba(180, 180, 180, 0.75)","rgba(180, 180, 180, 0.75)",
     "rgba(255, 140, 0, 0.75)","rgba(255, 140, 0, 0.75)","rgba(255, 140, 0, 0.75)",
@@ -358,15 +381,13 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
 }
 
-/* ───────── DEFAULT LAYOUT (V9 coords + V11 Page9 split) ───────── */
+/* ───────── DEFAULT LAYOUT (unchanged from your V11) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
       name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
-
-    // Header name on pages 2–10
     p2:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -377,39 +398,32 @@ const DEFAULT_LAYOUT = {
     p9:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p10: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Page 3
     p3TLDR: { domDesc: { x: 25, y: 310, w: 550, h: 210, size: 15, align: "left", maxLines: 10 } },
     p3main: { domDesc: { x: 25, y: 515, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
     p3act:  { domDesc: { x: 25, y: 700, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
 
-    // Page 4
     p4TLDR: { spider: { x: 25, y: 160, w: 550, h: 220, size: 14, align: "left", maxLines: 10 } },
     p4main: { spider: { x: 25, y: 330, w: 550, h: 520, size: 14, align: "left", maxLines: 26 } },
     p4act:  { spider: { x: 25, y: 650, w: 550, h: 140, size: 14, align: "left", maxLines: 8 } },
 
-    // Page 5 (text + chart)
     p5TLDR: { seqpat: { x: 25, y: 170, w: 170, h: 220, size: 15, align: "left", maxLines: 10 } },
     p5main: { seqpat: { x: 25, y: 530, w: 550, h: 520, size: 15, align: "left", maxLines: 28 } },
     p5act:  { seqpat: { x: 25, y: 680, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
     p5chart:{ chart:  { x: 250, y: 160, w: 320, h: 320 } },
 
-    // Page 6
     p6TLDR: { themeExpl: { x: 25, y: 160, w: 550, h: 220, size: 16, align: "left", maxLines: 10 } },
     p6main: { themeExpl: { x: 25, y: 300, w: 550, h: 520, size: 16, align: "left", maxLines: 26 } },
     p6act:  { themeExpl: { x: 25, y: 560, w: 550, h: 140, size: 16, align: "left", maxLines: 8 } },
 
-    // Page 7
     p7TLDR: { themesTop: { x: 25, y: 160, w: 550, h: 220, size: 15, align: "left", maxLines: 10 } },
     p7main: { themesTop: { x: 25, y: 350, w: 260, h: 520, size: 15, align: "left", maxLines: 26 } },
     p7act:  { themesTop: { x: 25, y: 640, w: 260, h: 140, size: 15, align: "left", maxLines: 8 } },
 
-    // ✅ themesLow (right column)
     p7: {
       hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
       themesLow: { x: 320, y: 210, w: 290, h: 900, size: 15, align: "left", maxLines: 28 },
     },
 
-    // Page 8: 2x2 grid
     p8grid: {
       collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
@@ -417,11 +431,10 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // Page 9: Actions (V11 = 4 boxes; derived from old anchor coords)
     p9: {
       hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
 
-      // legacy box kept (if act_anchor ever sent again)
+      // legacy box kept
       actAnchor: { x: 25, y: 300, w: 550, h: 220, size: 16, align: "left", maxLines: 8 },
 
       // new split boxes
@@ -500,7 +513,7 @@ function applyLayoutOverridesFromUrl(layout, url) {
   return { layout, applied, ignored };
 }
 
-/* ───────── input normaliser (updated for your current Botpress payload) ───────── */
+/* ───────── input normaliser ───────── */
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
   const text = d.text || {};
@@ -520,7 +533,6 @@ function normaliseInput(d = {}) {
   const email = identity.email || d.email || "";
   const dateLbl = d.dateLbl || d.date || d["p1:d"] || identity.dateLabel || (d.meta && d.meta.dateLbl) || "";
 
-  // bands for chart (prefer ctrl.bands)
   const ctrlBands = (ctrl.bands && typeof ctrl.bands === "object") ? ctrl.bands : null;
   const sumBands  = (summary.bands && typeof summary.bands === "object") ? summary.bands : null;
   const ctrl12    = (summary.ctrl12 && typeof summary.ctrl12 === "object") ? summary.ctrl12 : null;
@@ -533,62 +545,49 @@ function normaliseInput(d = {}) {
     (rootBands && Object.keys(rootBands).length ? rootBands : null) ||
     {};
 
-  // p3
   const p3_tldr = formatTLDR(text.execSummary_tldr || "");
   const p3_main = S(text.execSummary || "");
   const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-  // p4
   const p4_tldr = formatTLDR(text.state_tldr || "");
   const p4_dom  = S(text.domState || "");
   const p4_bot  = S(text.bottomState || "");
   const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
   const p4_act  = S(text.state_tipact || "");
 
-  // p5
   const p5_tldr = formatTLDR(text.frequency_tldr || "");
   const p5_main = S(text.frequency || "");
-  const p5_act  = ""; // not currently sent; safe blank
+  const p5_act  = "";
 
-  // p6
   const p6_tldr = formatTLDR(text.sequence_tldr || "");
   const p6_main = S(text.sequence || "");
   const p6_act  = S(text.sequence_tipact || "");
 
-  // p7
   const p7_tldr = formatTLDR(text.theme_tldr || "");
   const p7_main = S(text.theme || "");
   const p7_act  = S(text.theme_tipact || "");
   const p7_low  = S(text.themesLow || text.theme_low || "");
 
-  // p8 (workWith)
   const p8_C = S(workWith.concealed || "");
   const p8_T = S(workWith.triggered || "");
   const p8_R = S(workWith.regulated || "");
   const p8_L = S(workWith.lead || "");
 
-  // p9 (actions) — NEW: act_1..act_4
   const a1 = S(text.act_1 || "");
   const a2 = S(text.act_2 || "");
   const a3 = S(text.act_3 || "");
   const a4 = S(text.act_4 || "");
 
-  // legacy fallback (if anything still sends it)
   const legacyAnchor = S(text.act_anchor || "");
-
-  // Also build a combined fallback string if you ever want one
   const combinedActs = [a1, a2, a3, a4].map((x) => norm(x)).filter(Boolean).map((x) => `• ${x}`).join("\n");
 
   return {
-    // identity
     "p1:n": norm(name),
     "p1:e": norm(email),
     "p1:d": norm(dateLbl),
 
-    // bands for chart
     bands: bandsRaw,
 
-    // p3–p7
     "p3:tldr": p3_tldr,
     "p3:main": p3_main,
     "p3:act":  p3_act,
@@ -610,19 +609,16 @@ function normaliseInput(d = {}) {
     "p7:act":  p7_act,
     "p7:low":  p7_low,
 
-    // p8
     "p8:C": p8_C,
     "p8:T": p8_T,
     "p8:R": p8_R,
     "p8:L": p8_L,
 
-    // p9 (new)
     "p9:act1": a1,
     "p9:act2": a2,
     "p9:act3": a3,
     "p9:act4": a4,
 
-    // p9 legacy (only used if you want)
     "p9:anchor": legacyAnchor || combinedActs,
   };
 }
@@ -634,23 +630,21 @@ export default async function handler(req, res) {
     const decoded = Buffer.from(String(dataParam || ""), "base64").toString("utf-8");
     const payload = safeJsonParse(decoded, {});
 
-    // Template file name (V9 style)
-    const tpl = payload?.tpl || payload?.template || payload?.pdfTpl || "template.pdf";
+    // ✅ Template selection fixed
+    const tpl = pickTemplateFilename(payload);
+    res.setHeader("x-ctrl-template", tpl);
+
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
 
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-    // Layout (default + payload + URL overrides)
     const baseLayout = deepMerge(DEFAULT_LAYOUT, payload?.layout || {});
     const url = new URL(req.url, `http://${req.headers.host}`);
     const { layout: layoutWithOverrides, applied, ignored } = applyLayoutOverridesFromUrl(baseLayout, url);
 
-    // Normalised payload-to-keys map
     const P = normaliseInput(payload);
-
-    // Final layout access
     const L = layoutWithOverrides.pages || layoutWithOverrides;
 
     const pages = pdfDoc.getPages();
@@ -698,9 +692,15 @@ export default async function handler(req, res) {
 
       if (L.p5chart?.chart) {
         try {
-          await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p5chart.chart, P.bands || {}, payload?.spiderChartUrl || payload?.chart?.spiderUrl || "");
+          await embedRadarFromBandsOrUrl(
+            pdfDoc,
+            p5,
+            L.p5chart.chart,
+            P.bands || {},
+            payload?.spiderChartUrl || payload?.chart?.spiderUrl || ""
+          );
         } catch (e) {
-          console.warn("[fill-template:v11] Radar chart skipped:", e?.message || String(e));
+          console.warn("[fill-template:v11.1] Radar chart skipped:", e?.message || String(e));
         }
       }
     }
@@ -728,21 +728,21 @@ export default async function handler(req, res) {
       if (L.p8grid.collabL && P["p8:L"]) drawTextBox(p8, font, P["p8:L"], L.p8grid.collabL, { maxLines: L.p8grid.collabL.maxLines });
     }
 
-    // Page 9 — NEW: 4 actions
+    // Page 9 — 4 actions
     if (p9 && L.p9) {
       if (L.p9.act1 && P["p9:act1"]) drawTextBox(p9, font, P["p9:act1"], L.p9.act1, { maxLines: L.p9.act1.maxLines });
       if (L.p9.act2 && P["p9:act2"]) drawTextBox(p9, font, P["p9:act2"], L.p9.act2, { maxLines: L.p9.act2.maxLines });
       if (L.p9.act3 && P["p9:act3"]) drawTextBox(p9, font, P["p9:act3"], L.p9.act3, { maxLines: L.p9.act3.maxLines });
       if (L.p9.act4 && P["p9:act4"]) drawTextBox(p9, font, P["p9:act4"], L.p9.act4, { maxLines: L.p9.act4.maxLines });
 
-      // fallback: if no individual acts, render legacy combined anchor (won’t harm)
+      // fallback: render legacy combined anchor if no individual acts
       const noneActs = !P["p9:act1"] && !P["p9:act2"] && !P["p9:act3"] && !P["p9:act4"];
       if (noneActs && L.p9.actAnchor && P["p9:anchor"]) {
         drawTextBox(p9, font, P["p9:anchor"], L.p9.actAnchor, { maxLines: L.p9.actAnchor.maxLines });
       }
     }
 
-    // Diagnostics (kept lightweight; won’t break rendering)
+    // Diagnostics (safe headers)
     const missing = { identity: [], text: [], workWith: [], actions: [] };
 
     if (!P["p1:n"]) missing.identity.push("identity.fullName");
@@ -778,7 +778,6 @@ export default async function handler(req, res) {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
 
-    // Optional debug headers (safe + tiny)
     res.setHeader("x-ctrl-layout-overrides-applied", String(applied.length));
     res.setHeader("x-ctrl-layout-overrides-ignored", String(ignored.length));
     res.setHeader("x-ctrl-missing-count", String(
@@ -787,7 +786,7 @@ export default async function handler(req, res) {
 
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:v11] CRASH", err);
+    console.error("[fill-template:v11.1] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
