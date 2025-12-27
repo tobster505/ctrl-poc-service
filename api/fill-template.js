@@ -1,19 +1,10 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.3)
+ * CTRL PoC Export Service · fill-template (V12.3 LOCKED COORDS)
  *
- * V12.3 adds:
- * - DEFAULT_LAYOUT updated to match "URL - full co-ordinates" (stored in code)
- * - Text boxes auto-expand height when maxLines increases (fixes apparent maxLines cap)
- *
- * Keeps:
- * - URL layout override support (L_<pageKey>_<boxKey>_<prop>=value)
+ * - DEFAULT_LAYOUT has been updated to match the exact coords you supplied.
+ * - URL layout override support remains (L_<pageKey>_<boxKey>_<prop>=value)
  * - Debug reports: overrides applied/ignored + reasons
- * - Deep clone layout per request to avoid serverless cross-request mutation
- * - V9 Page 1 coords + Header coords p2–p8
- * - V9 chart style (polarArea) now on Page 4
- * - Backward-compatible text mapping (para1/para2 OR single block split)
- * - Template selection + fallback unchanged
- * - Base64 data decoding unchanged
+ * - Auto-expands box height when maxLines increases (prevents "fake maxLines cap")
  */
 
 export const config = { runtime: "nodejs" };
@@ -35,7 +26,7 @@ function safeJson(obj) {
   catch { return { _error: "Could not serialise debug object" }; }
 }
 
-/* ───────── filename helpers (unchanged) ───────── */
+/* ───────── filename helpers ───────── */
 function clampStrForFilename(s) {
   return S(s)
     .trim()
@@ -82,16 +73,6 @@ function makeOutputFilename(fullName, dateLbl) {
   return `PoC_Profile_${fn}_${ln}_${datePart}.pdf`;
 }
 
-/* ───────── TL→BL rect helper ───────── */
-const rectTLtoBL = (page, box) => {
-  const pageH = page.getHeight();
-  const x = N(box.x);
-  const w = Math.max(0, N(box.w));
-  const h = Math.max(0, N(box.h));
-  const y = pageH - N(box.y) - h;
-  return { x, y, w, h };
-};
-
 /* ───────── text wrapping + drawing ───────── */
 function wrapText(font, text, size, w) {
   const raw = S(text);
@@ -131,8 +112,8 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // If maxLines is increased, auto-expand the box height so extra lines can render.
-  // (Otherwise you hit the physical height limit and it "looks like" maxLines is capped.)
+  // Key fix: maxLines alone does not help if box height is too small.
+  // Auto-expand height to allow the extra lines to render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -142,14 +123,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
 
   const y = pageH - N(box.y) - h;
 
-  if (opts.bg === true || box.bg === true) {
-    page.drawRectangle({
-      x, y, width: w, height: h,
-      color: rgb(1, 1, 1),
-      borderWidth: 0,
-    });
-  }
-
   const innerW = Math.max(0, w - pad * 2);
   const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
 
@@ -158,20 +131,18 @@ function drawTextBox(page, font, text, box, opts = {}) {
 
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
-
     let dx = x + pad;
     if (align !== "left") {
       const lw = font.widthOfTextAtSize(ln, size);
       if (align === "center") dx = x + (w - lw) / 2;
       if (align === "right") dx = x + w - pad - lw;
     }
-
     page.drawText(ln, { x: dx, y: cursorY, size, font, color: rgb(0, 0, 0) });
     cursorY -= lineHeight;
   }
 }
 
-/* ───────── paragraph splitting (for missing para1/para2) ───────── */
+/* ───────── paragraph splitting ───────── */
 function splitToTwoParas(s) {
   const raw = S(s).replace(/\r/g, "").trim();
   if (!raw) return ["", ""];
@@ -210,7 +181,7 @@ async function loadTemplateBytesLocal(fname) {
   );
 }
 
-/* ───────── payload parsing (unchanged) ───────── */
+/* ───────── payload parsing ───────── */
 async function readPayload(req) {
   if (req.method === "POST") {
     const chunks = [];
@@ -231,7 +202,7 @@ async function readPayload(req) {
   }
 }
 
-/* ───────── dom/second detection (kept) ───────── */
+/* ───────── dom/second detection ───────── */
 function resolveStateKey(any) {
   const s = S(any).trim().toUpperCase();
   const c = s.charAt(0);
@@ -269,7 +240,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── radar/polar chart embed (FROM V9) ───────── */
+/* ───────── chart embed (V9 polar area) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -290,26 +261,10 @@ function makeSpiderChartUrl12(bandsRaw) {
   const data = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
 
   const CTRL_COLOURS = {
-    C: {
-      low:  "rgba(230, 228, 225, 0.55)",
-      mid:  "rgba(184, 180, 174, 0.55)",
-      high: "rgba(110, 106, 100, 0.55)",
-    },
-    T: {
-      low:  "rgba(244, 225, 198, 0.55)",
-      mid:  "rgba(211, 155,  74, 0.55)",
-      high: "rgba(154,  94,  26, 0.55)",
-    },
-    R: {
-      low:  "rgba(226, 236, 230, 0.55)",
-      mid:  "rgba(143, 183, 161, 0.55)",
-      high: "rgba( 79, 127, 105, 0.55)",
-    },
-    L: {
-      low:  "rgba(230, 220, 227, 0.55)",
-      mid:  "rgba(164, 135, 159, 0.55)",
-      high: "rgba( 94,  63,  90, 0.55)",
-    },
+    C: { low: "rgba(230, 228, 225, 0.55)", mid: "rgba(184, 180, 174, 0.55)", high: "rgba(110, 106, 100, 0.55)" },
+    T: { low: "rgba(244, 225, 198, 0.55)", mid: "rgba(211, 155,  74, 0.55)", high: "rgba(154,  94,  26, 0.55)" },
+    R: { low: "rgba(226, 236, 230, 0.55)", mid: "rgba(143, 183, 161, 0.55)", high: "rgba( 79, 127, 105, 0.55)" },
+    L: { low: "rgba(230, 220, 227, 0.55)", mid: "rgba(164, 135, 159, 0.55)", high: "rgba( 94,  63,  90, 0.55)" },
   };
 
   const colours = keys.map((k) => {
@@ -396,13 +351,16 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (from "URL - full co-ordinates") ───────── */
+/* ───────── DEFAULT LAYOUT (LOCKED IN) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
+    // Page 1
     p1: {
       name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
+
+    // Headers pages 2–8
     p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -411,24 +369,28 @@ const DEFAULT_LAYOUT = {
     p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
+    // Page 3 text
     p3Text: {
-      exec1: { x: 25, y: 310, w: 550, h: 210, size: 15, align: "left", maxLines: 10 },
-      exec2: { x: 25, y: 490, w: 550, h: 520, size: 15, align: "left", maxLines: 26 },
+      exec1: { x: 25, y: 380, w: 550, h: 250, size: 17, align: "left", maxLines: 13 },
+      exec2: { x: 25, y: 590, w: 550, h: 420, size: 17, align: "left", maxLines: 22 },
     },
 
+    // Page 4 overview + chart
     p4Text: {
-      ov1: { x: 25, y: 160, w: 250, h: 240, size: 16, align: "left", maxLines: 20 },
-      ov2: { x: 25, y: 530, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
+      ov1: { x: 25, y: 160, w: 200, h: 240, size: 17, align: "left", maxLines: 20 },
+      ov2: { x: 25, y: 560, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
+    // Page 5 deep dive + themes
     p5Text: {
-      dd1: { x: 25, y: 170, w: 550, h: 220, size: 15, align: "left", maxLines: 50 },
-      dd2: { x: 25, y: 500, w: 550, h: 520, size: 15, align: "left", maxLines: 28 },
-      th1: { x: 25, y: 700, w: 550, h: 140, size: 15, align: "left", maxLines: 8 },
-      th2: { x: 25, y: 870, w: 550, h: 140, size: 15, align: "left", maxLines: 8 },
+      dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
+      dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
+      th1: { x: 25, y: 540, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+      th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
+    // Page 6 workwith
     p6WorkWith: {
       collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
@@ -436,18 +398,19 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
+    // Page 7 actions
     p7Actions: {
-      act1: { x: 30, y: 240, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
-      act2: { x: 30, y: 345, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
-      act3: { x: 30, y: 450, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
-      act4: { x: 30, y: 555, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
-      act5: { x: 30, y: 660, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
-      act6: { x: 30, y: 765, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
+      act1: { x: 30, y: 380, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act2: { x: 30, y: 460, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act3: { x: 30, y: 540, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act4: { x: 30, y: 620, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act5: { x: 30, y: 700, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act6: { x: 30, y: 765, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
     },
   },
 };
 
-/* ───────── URL layout overrides (kept) ───────── */
+/* ───────── URL layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -456,8 +419,6 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   for (const [k, v] of url.searchParams.entries()) {
     if (!k.startsWith("L_")) continue;
 
-    // Expected: L_<pageKey>_<boxKey>_<prop>
-    // Example:  L_p3Text_exec1_y=520
     const bits = k.split("_");
     if (bits.length < 4) {
       ignored.push({ k, v, why: "bad_key_shape", expected: "L_<pageKey>_<boxKey>_<prop>" });
@@ -468,18 +429,9 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     const boxKey = bits[2];
     const prop = bits.slice(3).join("_");
 
-    if (!layoutPages?.[pageKey]) {
-      ignored.push({ k, v, why: "unknown_page", pageKey });
-      continue;
-    }
-    if (!layoutPages?.[pageKey]?.[boxKey]) {
-      ignored.push({ k, v, why: "unknown_box", pageKey, boxKey });
-      continue;
-    }
-    if (!allowed.has(prop)) {
-      ignored.push({ k, v, why: "unsupported_prop", prop });
-      continue;
-    }
+    if (!layoutPages?.[pageKey]) { ignored.push({ k, v, why: "unknown_page", pageKey }); continue; }
+    if (!layoutPages?.[pageKey]?.[boxKey]) { ignored.push({ k, v, why: "unknown_box", pageKey, boxKey }); continue; }
+    if (!allowed.has(prop)) { ignored.push({ k, v, why: "unsupported_prop", prop }); continue; }
 
     if (prop === "align") {
       const a0 = String(v || "").toLowerCase();
@@ -494,10 +446,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     }
 
     const num = Number(v);
-    if (!Number.isFinite(num)) {
-      ignored.push({ k, v, why: "not_a_number" });
-      continue;
-    }
+    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
 
     if (prop === "maxLines") layoutPages[pageKey][boxKey][prop] = Math.max(0, Math.floor(num));
     else layoutPages[pageKey][boxKey][prop] = num;
@@ -508,7 +457,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── input normaliser (backward compatible) ───────── */
+/* ───────── input normaliser ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
@@ -597,83 +546,44 @@ function normaliseInput(d = {}) {
   };
 }
 
-/* ───────── debug probe (updated for overrides) ───────── */
-function buildProbe(P, domSecond, tpl, ov) {
-  const bands = P.bands || {};
-  const required12 = [
-    "C_low","C_mid","C_high","T_low","T_mid","T_high",
-    "R_low","R_mid","R_high","L_low","L_mid","L_high",
-  ];
-  const keys = Object.keys(bands);
-  const missing12 = required12.filter((k) => !keys.includes(k));
-
-  const text = {
-    exec1: S(P.exec_summary_para1),
-    exec2: S(P.exec_summary_para2),
-    ov1: S(P.ctrl_overview_para1),
-    ov2: S(P.ctrl_overview_para2),
-    dd1: S(P.ctrl_deepdive_para1),
-    dd2: S(P.ctrl_deepdive_para2),
-    th1: S(P.themes_para1),
-    th2: S(P.themes_para2),
-    act1: S(P.Act1),
-    act2: S(P.Act2),
-    act3: S(P.Act3),
-    act4: S(P.Act4),
-    act5: S(P.Act5),
-    act6: S(P.Act6),
-  };
-
-  const warnings = [];
-  if (!text.exec1.trim() && !text.exec2.trim()) warnings.push("Missing exec_summary_para1/para2 (and no fallback content)");
-  if (!text.ov1.trim() && !text.ov2.trim()) warnings.push("Missing ctrl_overview_para1/para2 (and no fallback content)");
-  if (!text.dd1.trim() && !text.dd2.trim()) warnings.push("Missing ctrl_deepdive_para1/para2 (and no fallback content)");
-  if (!text.th1.trim() && !text.th2.trim()) warnings.push("Missing themes_para1/para2 (and no fallback content)");
-
+/* ───────── debug probe ───────── */
+function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
     where: "fill-template:V12.3:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
-
     identity: {
       fullName: P.identity.fullName,
       dateLabel: P.identity.dateLabel,
-      nameLen: P.identity.fullName.length,
-      dateLen: P.identity.dateLabel.length,
     },
-
-    bands: {
-      keysCount: keys.length,
-      present12Count: required12.length - missing12.length,
-      missing12,
-      anyPositive: Object.values(bands).some((v) => Number(v) > 0),
-      sample: Object.fromEntries(required12.slice(0, 6).map((k) => [k, bands[k]])),
+    textLengths: {
+      exec1: S(P.exec_summary_para1).length,
+      exec2: S(P.exec_summary_para2).length,
+      ov1: S(P.ctrl_overview_para1).length,
+      ov2: S(P.ctrl_overview_para2).length,
+      dd1: S(P.ctrl_deepdive_para1).length,
+      dd2: S(P.ctrl_deepdive_para2).length,
+      th1: S(P.themes_para1).length,
+      th2: S(P.themes_para2).length,
+      act1: S(P.Act1).length,
+      act2: S(P.Act2).length,
+      act3: S(P.Act3).length,
+      act4: S(P.Act4).length,
+      act5: S(P.Act5).length,
+      act6: S(P.Act6).length,
     },
-
-    textLengths: Object.fromEntries(Object.entries(text).map(([k, v]) => [k, v.length])),
-
-    chart: {
-      chartUrlProvided: !!P.chartUrl,
-      chartUrlPreview: P.chartUrl ? P.chartUrl.slice(0, 120) : "",
-    },
-
-    workWithLengths: {
-      concealed: (P.workWith?.concealed || "").length,
-      triggered: (P.workWith?.triggered || "").length,
-      regulated: (P.workWith?.regulated || "").length,
-      lead: (P.workWith?.lead || "").length,
-    },
-
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
       ignoredCount: ov?.ignored?.length || 0,
       applied: ov?.applied || [],
       ignored: ov?.ignored || [],
+      resolvedExamples: {
+        p4Text_ov1: safeJson(L?.p4Text?.ov1 || {}),
+        p5Text_th2: safeJson(L?.p5Text?.th2 || {}),
+      },
       note: "Use keys like L_p3Text_exec1_y=520 (pageKey=p3Text, boxKey=exec1)",
     },
-
-    warnings,
   };
 }
 
@@ -691,7 +601,7 @@ export default async function handler(req, res) {
       secondKey: payload?.secondKey
     });
 
-    // Template selection & fallback: unchanged
+    // Template selection & fallback (unchanged)
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
     const tpl = {
@@ -700,13 +610,13 @@ export default async function handler(req, res) {
       tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`,
     };
 
-    // Deep-clone layout per request (avoid mutation across invocations)
+    // clone layout per request
     const L = safeJson(DEFAULT_LAYOUT.pages);
 
-    // Apply URL overrides (kept)
+    // apply URL overrides (optional)
     const ov = applyLayoutOverridesFromUrl(L, url);
 
-    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov));
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
 
     const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -732,24 +642,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // Page mapping (8 pages total)
-    const p3 = pages[2] || null; // page 3
-    const p4 = pages[3] || null; // page 4 (chart now here)
-    const p5 = pages[4] || null; // page 5
-    const p6 = pages[5] || null; // page 6 (workwith)
-    const p7 = pages[6] || null; // page 7 (actions)
+    // page mapping (8 pages)
+    const p3 = pages[2] || null;
+    const p4 = pages[3] || null; // chart page
+    const p5 = pages[4] || null;
+    const p6 = pages[5] || null;
+    const p7 = pages[6] || null;
 
-    // Page 3 text
     if (p3) {
       drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
       drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
     }
 
-    // Page 4 text + chart
     if (p4) {
       drawTextBox(p4, font, P.ctrl_overview_para1, L.p4Text.ov1);
       drawTextBox(p4, font, P.ctrl_overview_para2, L.p4Text.ov2);
-
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
@@ -757,7 +664,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Page 5 deepdive + themes
     if (p5) {
       drawTextBox(p5, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
       drawTextBox(p5, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
@@ -765,7 +671,6 @@ export default async function handler(req, res) {
       drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
     }
 
-    // Page 6 workwith
     if (p6) {
       drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
       drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
@@ -773,7 +678,6 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
     }
 
-    // Page 7 actions
     if (p7) {
       drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
       drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
