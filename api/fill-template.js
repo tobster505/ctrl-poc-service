@@ -1,15 +1,19 @@
 /**
- * CTRL PoC Export Service · fill-template (Starter/PoC flow)
+ * CTRL PoC Export Service · fill-template (V9)
  * Place at: /api/fill-template.js  (ctrl-poc-service)
+ *
+ * V9 changes:
+ * - Plugged in Toby’s supplied coordinates into DEFAULT_LAYOUT
+ * - Added p7_themesLow box + input mapping so it can render
  */
 export const config = { runtime: "nodejs" };
 
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
-/* ───────────── utilities ───────────── */
+/* ───────────── small utils ───────────── */
 const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
@@ -19,54 +23,91 @@ function safeJson(obj) {
   catch { return { _error: "Could not serialise debug object" }; }
 }
 
-/** TLDR → main → action packer */
-function packSection(tldr, main, action) {
-  const blocks = [];
-  const T = norm(tldr);
-  const M = norm(main);
-  const A = norm(action);
-  if (T) blocks.push(T);
-  if (M) blocks.push(M);
-  if (A) blocks.push(A);
-  return blocks.join("\n\n\n");
+function clampStrForFilename(s) {
+  return S(s)
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Za-z0-9_\-]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseDateLabelToYYYYMMDD(dateLbl) {
+  const s = S(dateLbl).trim();
+
+  // Accept: "19 Dec 2025" / "19 December 2025"
+  const m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  if (m) {
+    const dd = String(m[1]).padStart(2, "0");
+    const monRaw = m[2].toLowerCase();
+    const yyyy = m[3];
+
+    const map = {
+      jan: "01", january: "01",
+      feb: "02", february: "02",
+      mar: "03", march: "03",
+      apr: "04", april: "04",
+      may: "05",
+      jun: "06", june: "06",
+      jul: "07", july: "07",
+      aug: "08", august: "08",
+      sep: "09", sept: "09", september: "09",
+      oct: "10", october: "10",
+      nov: "11", november: "11",
+      dec: "12", december: "12",
+    };
+
+    const mm = map[monRaw] || map[monRaw.slice(0, 3)];
+    if (mm) return `${yyyy}-${mm}-${dd}`;
+  }
+
+  // Accept: "2025-12-19"
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  // Fallback: filename-safe label
+  return clampStrForFilename(s || "date");
+}
+
+function makeOutputFilename(fullName, dateLbl) {
+  const parts = S(fullName).trim().split(/\s+/).filter(Boolean);
+  const first = parts[0] || "First";
+  const last = parts.length > 1 ? parts[parts.length - 1] : "Surname";
+  const datePart = parseDateLabelToYYYYMMDD(dateLbl);
+
+  const fn = clampStrForFilename(first);
+  const ln = clampStrForFilename(last);
+
+  return `PoC_Profile_${fn}_${ln}_${datePart}.pdf`;
 }
 
 /* ───────── TL→BL rect helper ───────── */
-const rectTLtoBL = (page, box, inset = 0) => {
+const rectTLtoBL = (page, box) => {
   const pageH = page.getHeight();
-  const x = N(box.x) + inset;
-  const w = Math.max(0, N(box.w) - inset * 2);
-
-  // IMPORTANT: use the SAME height value for both h and y-calc
-  const hRaw = N(box.h || 400);
-  const h = Math.max(0, hRaw - inset * 2);
-
-  const y = pageH - N(box.y) - hRaw + inset;
+  const x = N(box.x);
+  const w = Math.max(0, N(box.w));
+  const h = Math.max(0, N(box.h));
+  const y = pageH - N(box.y) - h;
   return { x, y, w, h };
 };
 
-/* ───────── text box helper ───────── */
-function drawTextBox(page, font, text, box, opts = {}) {
-  if (!page || !font || !box) return;
-  const t0 = norm(text);
-  if (!t0) return;
-
-  const { x, y, w, h } = rectTLtoBL(page, box, 0);
-  const size = N(box.size || opts.size || 12);
-  const lineHeight = N(opts.lineHeight || Math.round(size * 1.3));
-  const maxLines = N(opts.maxLines || box.maxLines || 999);
-  const align = opts.align || box.align || "left";
-
-  // Split words but keep intentional newlines
-  const paragraphs = String(t0).split("\n");
+/* ───────── text wrapping + drawing ───────── */
+function wrapText(font, text, size, w) {
+  const raw = S(text);
+  const paragraphs = raw.split("\n");
   const lines = [];
 
   for (const para of paragraphs) {
     const words = para.split(/\s+/).filter(Boolean);
     let line = "";
 
+    if (!words.length) {
+      lines.push("");
+      continue;
+    }
+
     for (const word of words) {
-      const test = line ? line + " " + word : word;
+      const test = line ? `${line} ${word}` : word;
       const width = font.widthOfTextAtSize(test, size);
       if (width <= w) {
         line = test;
@@ -74,29 +115,121 @@ function drawTextBox(page, font, text, box, opts = {}) {
         if (line) lines.push(line);
         line = word;
       }
-      if (lines.length >= maxLines) break;
     }
-    if (lines.length >= maxLines) break;
     if (line) lines.push(line);
-
-    if (lines.length < maxLines) lines.push("");
   }
 
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
 
-  const clipped = lines.slice(0, maxLines);
-  const startY = y + h - lineHeight;
+function drawTextBox(page, font, text, box, opts = {}) {
+  if (!page || !font || !box) return;
+  const t0 = S(text);
+  if (!t0.trim()) return;
 
-  for (let i = 0; i < clipped.length; i++) {
-    const t = clipped[i];
-    const tw = font.widthOfTextAtSize(t, size);
-    let tx = x;
-    if (align === "center") tx = x + (w - tw) / 2;
-    if (align === "right") tx = x + (w - tw);
-    const ty = startY - i * lineHeight;
-    if (ty < y) break;
-    page.drawText(t, { x: tx, y: ty, size, font });
+  const { x, y, w, h } = rectTLtoBL(page, box);
+  const size = N(opts.size ?? box.size ?? 12);
+  const lineGap = N(opts.lineGap ?? box.lineGap ?? 2);
+  const maxLines = N(opts.maxLines ?? box.maxLines ?? 999);
+  const alignRaw = String(opts.align ?? box.align ?? "left").toLowerCase();
+  const align = (alignRaw === "centre") ? "center" : alignRaw;
+
+  const pad = N(opts.pad ?? box.pad ?? 0);
+
+  if (opts.bg === true || box.bg === true) {
+    page.drawRectangle({
+      x,
+      y,
+      width: w,
+      height: h,
+      color: rgb(1, 1, 1),
+      borderWidth: 0,
+    });
   }
+
+  const innerW = Math.max(0, w - pad * 2);
+  const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
+
+  const lineHeight = size + lineGap;
+  let cursorY = y + h - pad - size;
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (cursorY < y + pad) break;
+
+    let dx = x + pad;
+    if (align !== "left") {
+      const lw = font.widthOfTextAtSize(ln, size);
+      if (align === "center") dx = x + (w - lw) / 2;
+      if (align === "right") dx = x + w - pad - lw;
+    }
+
+    page.drawText(ln, { x: dx, y: cursorY, size, font, color: rgb(0, 0, 0) });
+    cursorY -= lineHeight;
+  }
+}
+
+function drawLabelAndBody(page, fontB, font, label, body, box, bodyOpts = {}) {
+  const L = norm(label);
+  const B = S(body || "").replace(/\r/g, "").trim();
+  if (!L && !B) return;
+
+  const { x, y, w, h } = rectTLtoBL(page, box);
+  const size = N(box.size ?? 12);
+  const lineGap = N(box.lineGap ?? 2);
+  const pad = N(box.pad ?? 0);
+  const maxLines = N(box.maxLines ?? 50);
+
+  if (box.bg === true) {
+    page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1), borderWidth: 0 });
+  }
+
+  const lineHeight = size + lineGap;
+  let cursorY = y + h - pad - size;
+
+  if (L) {
+    page.drawText(L, { x: x + pad, y: cursorY, size, font: fontB, color: rgb(0, 0, 0) });
+    cursorY -= lineHeight;
+  }
+
+  if (B) {
+    const bodyBox = {
+      x: box.x,
+      y: box.y + (L ? lineHeight : 0),
+      w: box.w,
+      h: box.h - (L ? lineHeight : 0),
+      size: box.size,
+      align: (box.align ?? "left"),
+      maxLines: Math.max(1, maxLines - (L ? 1 : 0)),
+      lineGap: box.lineGap,
+      pad: box.pad,
+      bg: false,
+    };
+    drawTextBox(page, font, B, bodyBox, { ...bodyOpts, maxLines: bodyBox.maxLines });
+  }
+}
+
+/* ───────── TLDR formatting ───────── */
+function formatTLDR(tldr) {
+  const s = S(tldr).trim();
+  if (!s) return "";
+
+  if (s.includes("\n")) {
+    return s
+      .split("\n")
+      .map((ln) => ln.trim())
+      .filter(Boolean)
+      .map((ln) => ln.startsWith("•") ? ln : `• ${ln.replace(/^-\s*/, "")}`)
+      .join("\n");
+  }
+
+  const parts = s.split("•").map((x) => x.trim()).filter(Boolean);
+  if (parts.length <= 1) {
+    const guess = s.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean);
+    return guess.map((x) => (x.startsWith("•") ? x : `• ${x}`)).join("\n");
+  }
+  return parts.map((x) => `• ${x}`).join("\n");
 }
 
 /* ───────── template loader ───────── */
@@ -126,17 +259,13 @@ async function loadTemplateBytesLocal(fname) {
   );
 }
 
-/* ───────── payload parsing (GET ?data=... or POST JSON) ───────── */
+/* ───────── payload parsing ───────── */
 async function readPayload(req) {
   if (req.method === "POST") {
     const chunks = [];
     for await (const ch of req) chunks.push(ch);
     const raw = Buffer.concat(chunks).toString("utf8") || "{}";
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return {};
-    }
+    try { return JSON.parse(raw); } catch { return {}; }
   }
 
   const url = new URL(req.url, "http://localhost");
@@ -169,9 +298,10 @@ function resolveStateKey(any) {
 function computeDomAndSecondKeys(P) {
   const raw = P.raw || {};
   const ctrl = raw.ctrl || {};
-  const summary = ctrl.summary || {};
+  const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
 
   const domKey =
+    resolveStateKey(P.domKey) ||
     resolveStateKey(P["p3:dom"]) ||
     resolveStateKey(raw.domState) ||
     resolveStateKey(raw.ctrl?.dominant) ||
@@ -207,49 +337,96 @@ function computeDomAndSecondKeys(P) {
     .sort((a, b) => b[1] - a[1]);
 
   const secondKey = ordered[0]?.[0] || (domKey === "C" ? "T" : "C");
-  return { domKey, secondKey };
+  return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
 /* ───────── radar chart embed (QuickChart) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
-  const labels = [
-    "C_low","C_mid","C_high","T_low","T_mid","T_high",
-    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  const keys = [
+    "C_low","C_mid","C_high",
+    "T_low","T_mid","T_high",
+    "R_low","R_mid","R_high",
+    "L_low","L_mid","L_high",
   ];
 
-  const vals = labels.map((k) => Number(bandsRaw?.[k] || 0));
+  const displayLabels = [
+    "", "Concealed", "",
+    "", "Triggered", "",
+    "", "Regulated", "",
+    "", "Lead", ""
+  ];
+
+  const vals = keys.map((k) => Number(bandsRaw?.[k] || 0));
   const maxVal = Math.max(...vals, 1);
-  const scaled = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+  const data = vals.map((v) => (maxVal > 0 ? v / maxVal : 0));
+
+  const CTRL_COLOURS = {
+    C: {
+      low:  "rgba(230, 228, 225, 0.55)",
+      mid:  "rgba(184, 180, 174, 0.55)",
+      high: "rgba(110, 106, 100, 0.55)",
+    },
+    T: {
+      low:  "rgba(244, 225, 198, 0.55)",
+      mid:  "rgba(211, 155,  74, 0.55)",
+      high: "rgba(154,  94,  26, 0.55)",
+    },
+    R: {
+      low:  "rgba(226, 236, 230, 0.55)",
+      mid:  "rgba(143, 183, 161, 0.55)",
+      high: "rgba( 79, 127, 105, 0.55)",
+    },
+    L: {
+      low:  "rgba(230, 220, 227, 0.55)",
+      mid:  "rgba(164, 135, 159, 0.55)",
+      high: "rgba( 94,  63,  90, 0.55)",
+    },
+  };
+
+  const colours = keys.map((k) => {
+    const state = k[0];
+    const tier = k.split("_")[1];
+    return CTRL_COLOURS[state]?.[tier] || "rgba(0,0,0,0.10)";
+  });
+
+  // rotate so the labels sit at 45 degrees (your latest preferred look)
+  const startAngle = -Math.PI / 4;
 
   const cfg = {
-    type: "radar",
+    type: "polarArea",
     data: {
-      labels,
+      labels: displayLabels,
       datasets: [{
-        label: "",
-        data: scaled,
-        fill: true,
-        borderWidth: 0,
-        pointRadius: 0,
-        backgroundColor: "rgba(184, 15, 112, 0.35)",
+        data,
+        backgroundColor: colours,
+        borderWidth: 3,
+        borderColor: "rgba(0, 0, 0, 0.20)",
       }],
     },
     options: {
       plugins: { legend: { display: false } },
+      startAngle,
       scales: {
         r: {
-          min: 0, max: 1,
+          startAngle,
+          min: 0,
+          max: 1,
           ticks: { display: false },
-          grid: { display: false },
+          grid: { display: true },
           angleLines: { display: false },
-          pointLabels: { display: false },
+          pointLabels: {
+            display: true,
+            padding: 14,
+            font: { size: 26, weight: "bold" }, // bigger labels (you asked)
+            centerPointLabels: true,
+          },
         },
       },
     },
   };
 
   const enc = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${enc}&format=png&width=800&height=800&backgroundColor=transparent`;
+  return `https://quickchart.io/chart?c=${enc}&format=png&width=900&height=900&backgroundColor=transparent&version=4`;
 }
 
 async function embedRemoteImage(pdfDoc, url) {
@@ -268,146 +445,168 @@ async function embedRemoteImage(pdfDoc, url) {
   catch { return await pdfDoc.embedJpg(buf); }
 }
 
-async function embedRadarFromBands(pdfDoc, page, box, bandsRaw) {
-  if (!pdfDoc || !page || !box || !bandsRaw) return;
+async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
+  if (!pdfDoc || !page || !box) return;
 
-  const hasAny =
-    bandsRaw && typeof bandsRaw === "object" &&
-    Object.values(bandsRaw).some((v) => Number(v) > 0);
+  let url = S(chartUrl).trim();
+  if (!url) {
+    const hasAny =
+      bandsRaw && typeof bandsRaw === "object" &&
+      Object.values(bandsRaw).some((v) => Number(v) > 0);
+    if (!hasAny) return;
+    url = makeSpiderChartUrl12(bandsRaw);
+  }
 
-  if (!hasAny) return;
-
-  const url = makeSpiderChartUrl12(bandsRaw);
   const img = await embedRemoteImage(pdfDoc, url);
   if (!img) return;
 
   const H = page.getHeight();
-  const { x, y, w, h } = box;
-  page.drawImage(img, { x, y: H - y - h, width: w, height: h });
+  page.drawImage(img, { x: box.x, y: H - box.y - box.h, width: box.w, height: box.h });
 }
 
-/* ───────── default layout (UPDATED: adds p9 actAnchor box) ───────── */
+/* ───────── DEFAULT LAYOUT (V9: your coordinates) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
-      name: { x: 7, y: 473, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
-      date: { x: 210, y: 600, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
+      name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
+      date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Header name on pages 2–10 (used by handler loop)
+    // Header name on pages 2–10
     p2:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-
-    p3:  {
-      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      domDesc: { x: 25, y: 200, w: 550, h: 900, size: 18, align: "left", maxLines: 38 },
-    },
-
-    p4:  {
-      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      spider:  { x: 25, y: 200, w: 550, h: 900, size: 18, align: "left", maxLines: 38 },
-    },
-
-    p5:  {
-      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      seqpat:  { x: 25, y: 200, w: 550, h: 900, size: 18, align: "left", maxLines: 38 },
-      chart:   { x: 48, y: 462, w: 500, h: 300 },
-    },
-
-    p6:  {
-      hdrName:   { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      themeExpl: { x: 25, y: 200, w: 550, h: 900, size: 18, align: "left", maxLines: 38 },
-    },
-
-    p7:  {
-      hdrName:   { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      themesTop: { x: 30,  y: 200, w: 590, h: 900, size: 17, align: "left", maxLines: 42 }, // widened for single-box theme mode
-      themesLow: { x: 320, y: 200, w: 300, h: 900, size: 17, align: "left", maxLines: 28 }, // kept for legacy 2-column
-    },
-
-    p8:  {
-      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      collabC: { x: 30,  y: 200, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 200, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabR: { x: 30,  y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-      collabL: { x: 320, y: 650, w: 300, h: 420, size: 17, align: "left", maxLines: 14 },
-    },
-
-    p9:  {
-      hdrName:   { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
-      actAnchor: { x: 25,  y: 200, w: 550, h: 220, size: 20, align: "left", maxLines: 8 }, // NEW: action anchor
-    },
-
+    p3:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p4:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p5:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p6:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p7:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p8:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p9:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p10: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+
+    // Page 3
+    p3TLDR: { domDesc: { x: 25, y: 310, w: 550, h: 210, size: 15, align: "left", maxLines: 10 } },
+    p3main: { domDesc: { x: 25, y: 515, w: 550, h: 520, size: 15, align: "left", maxLines: 26 } },
+    p3act:  { domDesc: { x: 25, y: 700, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
+
+    // Page 4
+    p4TLDR: { spider: { x: 25, y: 160, w: 550, h: 220, size: 14, align: "left", maxLines: 10 } },
+    p4main: { spider: { x: 25, y: 330, w: 550, h: 520, size: 14, align: "left", maxLines: 26 } },
+    p4act:  { spider: { x: 25, y: 650, w: 550, h: 140, size: 14, align: "left", maxLines: 8 } },
+
+    // Page 5 (text + chart)
+    p5TLDR: { seqpat: { x: 25, y: 170, w: 170, h: 220, size: 15, align: "left", maxLines: 10 } },
+    p5main: { seqpat: { x: 25, y: 530, w: 550, h: 520, size: 15, align: "left", maxLines: 28 } },
+    p5act:  { seqpat: { x: 25, y: 680, w: 550, h: 140, size: 15, align: "left", maxLines: 8 } },
+    p5chart:{ chart:  { x: 250, y: 160, w: 320, h: 320 } },
+
+    // Page 6
+    p6TLDR: { themeExpl: { x: 25, y: 160, w: 550, h: 220, size: 16, align: "left", maxLines: 10 } },
+    p6main: { themeExpl: { x: 25, y: 300, w: 550, h: 520, size: 16, align: "left", maxLines: 26 } },
+    p6act:  { themeExpl: { x: 25, y: 560, w: 550, h: 140, size: 16, align: "left", maxLines: 8 } },
+
+    // Page 7
+    p7TLDR: { themesTop: { x: 30, y: 280, w: 550, h: 220, size: 16, align: "left", maxLines: 10 } },
+    p7main: { themesTop: { x: 30, y: 430, w: 550, h: 520, size: 16, align: "left", maxLines: 26 } },
+    p7act:  { themesTop: { x: 30, y: 660, w: 550, h: 140, size: 16, align: "left", maxLines: 8 } },
+
+    // ✅ new: themesLow (right column)
+    p7: {
+      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      themesLow: { x: 320, y: 210, w: 290, h: 900, size: 15, align: "left", maxLines: 28 },
+    },
+
+    // Page 8: 2x2 grid
+    p8grid: {
+      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabR: { x: 30,  y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+    },
+
+    // Page 9: Action anchor
+    p9: {
+      hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 },
+      actAnchor: { x: 25, y: 300, w: 550, h: 220, size: 16, align: "left", maxLines: 8 },
+    },
   },
 };
 
-/* deep merge override into default */
-function mergeLayout(overrides = null) {
-  const base = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
-  if (!overrides || typeof overrides !== "object") return base;
+function deepMerge(target, source) {
+  const out = JSON.parse(JSON.stringify(target || {}));
+  if (!source || typeof source !== "object") return out;
 
-  const out = JSON.parse(JSON.stringify(base));
-  const ov = overrides;
-
-  if (ov.pages && typeof ov.pages === "object") {
-    out.pages = out.pages || {};
-    for (const pk of Object.keys(ov.pages)) {
-      out.pages[pk] = { ...(out.pages[pk] || {}), ...(ov.pages[pk] || {}) };
+  for (const k of Object.keys(source)) {
+    const sv = source[k];
+    const tv = out[k];
+    if (sv && typeof sv === "object" && !Array.isArray(sv)) {
+      out[k] = deepMerge(tv && typeof tv === "object" ? tv : {}, sv);
+    } else {
+      out[k] = sv;
     }
   }
-
-  for (const k of Object.keys(ov)) {
-    if (k === "pages") continue;
-    out[k] = ov[k];
-  }
-
   return out;
 }
 
 /* ───────── URL-driven layout overrides ───────── */
 function applyLayoutOverridesFromUrl(layout, url) {
-  if (!layout || !layout.pages || !url || !url.searchParams) return layout;
+  if (!layout || !layout.pages || !url || !url.searchParams) return { layout, applied: [], ignored: [] };
 
-  const allowed = new Set(["x","y","w","h","size","maxLines","align"]);
+  const allowed = new Set(["x","y","w","h","size","maxLines","align","pad","lineGap","bg"]);
   const pages = layout.pages;
+
+  const applied = [];
+  const ignored = [];
 
   for (const [k, v] of url.searchParams.entries()) {
     if (!k.startsWith("L_")) continue;
 
-    const bits = k.split("_"); // L_p3_domDesc_y
-    if (bits.length < 4) continue;
+    const bits = k.split("_");
+    if (bits.length < 4) { ignored.push({ k, v, why: "bits<4" }); continue; }
 
     const pageKey = bits[1];
     const boxKey  = bits[2];
     const prop    = bits.slice(3).join("_");
 
-    if (!pages[pageKey] || !pages[pageKey][boxKey]) continue;
-    if (!allowed.has(prop)) continue;
+    if (!pages[pageKey] || !pages[pageKey][boxKey]) { ignored.push({ k, v, why: "unknown box" }); continue; }
+    if (!allowed.has(prop)) { ignored.push({ k, v, why: "prop not allowed" }); continue; }
 
     if (prop === "align") {
-      const a = String(v || "").toLowerCase();
-      if (["left","center","right"].includes(a)) pages[pageKey][boxKey][prop] = a;
+      const a0 = String(v || "").toLowerCase();
+      const a = (a0 === "centre") ? "center" : a0;
+      if (["left","center","right"].includes(a)) {
+        pages[pageKey][boxKey][prop] = a;
+        applied.push({ k, v });
+      } else {
+        ignored.push({ k, v, why: "bad align" });
+      }
+      continue;
+    }
+
+    if (prop === "bg") {
+      pages[pageKey][boxKey][prop] = (String(v) === "1" || String(v).toLowerCase() === "true");
+      applied.push({ k, v });
       continue;
     }
 
     const num = Number(v);
-    if (!Number.isFinite(num)) continue;
+    if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not a number" }); continue; }
+
     pages[pageKey][boxKey][prop] = num;
+    applied.push({ k, v });
   }
 
-  return layout;
+  return { layout, applied, ignored };
 }
 
-/* ───────── input normaliser (UPDATED for new payload keys) ───────── */
+/* ───────── input normaliser ───────── */
 function normaliseInput(d = {}) {
   const identity = d.identity || {};
-  const ctrl = d.ctrl || {};
-  const summary = ctrl.summary || {};
   const text = d.text || {};
   const workWith = d.workWith || {};
-  const chart = d.chart || {};
+  const ctrl = d.ctrl || {};
+  const summary = ctrl.summary || {};
 
-  const nameCand =
+  const name =
     (d.person && d.person.fullName) ||
     identity.fullName ||
     identity.name ||
@@ -416,24 +615,9 @@ function normaliseInput(d = {}) {
     identity.preferredName ||
     "";
 
-  const dateLbl =
-    d.dateLbl ||
-    d.date ||
-    d["p1:d"] ||
-    (d.meta && d.meta.dateLbl) ||
-    "";
+  const email = identity.email || d.email || "";
+  const dateLbl = d.dateLbl || d.date || d["p1:d"] || (d.meta && d.meta.dateLbl) || "";
 
-  const domState =
-    d.domState ||
-    ctrl.dominant ||
-    summary.domState ||
-    ctrl.domState ||
-    d["p3:dom"] ||
-    "";
-
-  const chartUrl = d.chartUrl || chart.url || d["p5:chart"] || "";
-
-  // Prefer the first NON-EMPTY bands object.
   const ctrlBands = (ctrl.bands && typeof ctrl.bands === "object") ? ctrl.bands : null;
   const sumBands  = (summary.bands && typeof summary.bands === "object") ? summary.bands : null;
   const ctrl12    = (summary.ctrl12 && typeof summary.ctrl12 === "object") ? summary.ctrl12 : null;
@@ -446,90 +630,164 @@ function normaliseInput(d = {}) {
     (rootBands && Object.keys(rootBands).length ? rootBands : null) ||
     {};
 
-  // ---- UPDATED KEY COMPATIBILITY LAYER ----
-  // Exec
-  const execTLDR = text.execSummary_tldr || "";
-  const execMain = text.execSummary || "";
-  const execTip  = text.execSummary_tipact || text.tipAction || "";
+  const domState =
+    d.domState ||
+    ctrl.dominant ||
+    summary.domState ||
+    ctrl.domState ||
+    d["p3:dom"] ||
+    "";
 
-  // State (Gen2)
-  const stateTLDR  = text.state_tldr || text.domState_tldr || "";
-  const stateMain  = text.domState || "";
-  const bottomMain = text.bottomState || "";
-  const stateTip   = text.state_tipact || ""; // optional, new
+  // p3
+  const p3_tldr = formatTLDR(text.execSummary_tldr || "");
+  const p3_main = S(text.execSummary || "");
+  const p3_act  = S(text.execSummary_tipact || text.tipAction || "");
 
-  // Frequency + sequence
-  const freqTLDR = text.frequency_tldr || "";
-  const freqMain = text.frequency || "";
+  // p4
+  const p4_tldr = formatTLDR(text.state_tldr || text.domState_tldr || "");
+  const p4_dom  = S(text.domState || "");
+  const p4_bot  = S(text.bottomState || "");
+  const p4_main = [p4_dom, p4_bot].map((s) => S(s).trim()).filter(Boolean).join("\n\n");
+  const p4_act  = S(text.state_tipact || "");
 
-  const seqTLDR = text.sequence_tldr || "";
-  const seqMain = text.sequence || "";
-  const seqTip  = text.sequence_tipact || ""; // new
+  // p5
+  const p5_tldr = formatTLDR(text.frequency_tldr || "");
+  const p5_main = S(text.frequency || "");
+  const p5_act  = S(text.frequency_tipact || "");
+  const chartUrl = S(d.chartUrl || d.chart?.url || d["p5:chart"] || "");
 
-  // Themes
-  // New “single theme block” format:
-  const themeTLDR = text.theme_tldr || "";
-  const themeMain = text.theme || "";
-  const themeTip  = text.theme_tipact || "";
+  // p6
+  const p6_tldr = formatTLDR(text.sequence_tldr || "");
+  const p6_main = S(text.sequence || "");
+  const p6_act  = S(text.sequence_tipact || "");
 
-  // Legacy “two box” format:
-  const topTLDR = text.themesTop_tldr || themeTLDR || "";
-  const lowTLDR = text.themesLow_tldr || "";
+  // p7
+  const p7_tldr = formatTLDR(text.theme_tldr || text.themesTop_tldr || "");
+  const p7_main = S(text.theme || text.themesTop || "");
+  const p7_act  = S(text.theme_tipact || text.themesTop_tip || "");
+  const p7_low  = S(text.themesLow || text.themeLow || text.themes_low || ""); // ✅ wired for your new p7_themesLow coords
 
-  // If new single theme exists, push it into themesTop slot (and leave low empty)
-  const themesTopMain = text.themesTop || themeMain || "";
-  const themesLowMain = text.themesLow || "";
+  // p8
+  const p8C = S(workWith.concealed || "");
+  const p8T = S(workWith.triggered || "");
+  const p8R = S(workWith.regulated || "");
+  const p8L = S(workWith.lead || "");
 
-  // Action Anchor (Gen5)
-  const actAnchor = text.act_anchor || text.action_anchor || "";
-
-  const domPlusBottom = bottomMain ? `${norm(stateMain)}\n\n${norm(bottomMain)}` : stateMain;
+  // p9
+  const p9_anchor = S(text.act_anchor || text.action_anchor || "");
 
   return {
     raw: d,
+    identity: { fullName: name, email, dateLabel: dateLbl },
+
     bands: bandsRaw,
     layout: d.layout || null,
 
-    "p1:n": d["p1:n"] || nameCand || "",
-    "p1:d": d["p1:d"] || dateLbl || "",
-    "p3:dom": d["p3:dom"] || domState || "",
+    "p1:n": name,
+    "p1:d": dateLbl,
+    "p3:dom": domState,
 
-    // Page 3 (Exec) — TLDR first
-    "p3:exec": d["p3:exec"] || execMain || "",
-    "p3:tldr": d["p3:tldr"] || execTLDR || "",
-    "p3:tip":  d["p3:tip"]  || execTip  || "",
+    "p3:tldr": p3_tldr,
+    "p3:main": p3_main,
+    "p3:act":  p3_act,
 
-    // Page 4 (State) — TLDR first
-    "p4:stateDeep": d["p4:stateDeep"] || domPlusBottom || "",
-    "p4:tldr":      d["p4:tldr"]      || stateTLDR || "",
-    "p4:action":    d["p4:action"]    || stateTip  || "",
+    "p4:tldr": p4_tldr,
+    "p4:main": p4_main,
+    "p4:act":  p4_act,
 
-    // Page 5 (Frequency) — TLDR first
-    "p5:freq":   d["p5:freq"]   || freqMain || "",
-    "p5:tldr":   d["p5:tldr"]   || freqTLDR || "",
-    "p5:action": d["p5:action"] || "", // no freq action in your new payload
-    "p5:chart":  d["p5:chart"]  || chartUrl || "",
+    "p5:tldr": p5_tldr,
+    "p5:main": p5_main,
+    "p5:act":  p5_act,
+    "p5:chartUrl": chartUrl,
 
-    // Page 6 (Sequence) — TLDR first
-    "p6:seq":    d["p6:seq"]    || seqMain || "",
-    "p6:tldr":   d["p6:tldr"]   || seqTLDR || "",
-    "p6:action": d["p6:action"] || seqTip  || "",
+    "p6:tldr": p6_tldr,
+    "p6:main": p6_main,
+    "p6:act":  p6_act,
 
-    // Page 7 (Themes) — TLDR first (+ optional theme tip packed into top)
-    "p7:themesTop":      d["p7:themesTop"]      || themesTopMain || "",
-    "p7:themesLow":      d["p7:themesLow"]      || themesLowMain || "",
-    "p7:themesTop_tldr": d["p7:themesTop_tldr"] || topTLDR || "",
-    "p7:themesLow_tldr": d["p7:themesLow_tldr"] || lowTLDR || "",
-    "p7:themesTop_tip":  themeTip || "",
+    "p7:tldr": p7_tldr,
+    "p7:main": p7_main,
+    "p7:act":  p7_act,
+    "p7:low":  p7_low,
 
-    // Page 8 (WorkWith)
-    "p8:collabC": d["p8:collabC"] || workWith.concealed || "",
-    "p8:collabT": d["p8:collabT"] || workWith.triggered || "",
-    "p8:collabR": d["p8:collabR"] || workWith.regulated || "",
-    "p8:collabL": d["p8:collabL"] || workWith.lead || "",
+    "p8:C": p8C,
+    "p8:T": p8T,
+    "p8:R": p8R,
+    "p8:L": p8L,
 
-    // Page 9 (Action Anchor)
-    "p9:actAnchor": d["p9:actAnchor"] || actAnchor || "",
+    "p9:anchor": p9_anchor,
+  };
+}
+
+/* ───────── probe summary (unchanged) ───────── */
+function buildMasterProbe(P, domSecond) {
+  const fullName = S(P.identity?.fullName || "");
+  const email = S(P.identity?.email || "");
+  const dateLabel = S(P.identity?.dateLabel || P["p1:d"] || "");
+
+  const bands = P.bands || {};
+  const bandKeys = Object.keys(bands);
+  const required12 = [
+    "C_low","C_mid","C_high","T_low","T_mid","T_high",
+    "R_low","R_mid","R_high","L_low","L_mid","L_high",
+  ];
+  const present12 = required12.filter((k) => bandKeys.includes(k)).length;
+
+  const textKeys = 0
+    + (P["p3:tldr"] ? 1 : 0) + (P["p3:main"] ? 1 : 0) + (P["p3:act"] ? 1 : 0)
+    + (P["p4:tldr"] ? 1 : 0) + (P["p4:main"] ? 1 : 0) + (P["p4:act"] ? 1 : 0)
+    + (P["p5:tldr"] ? 1 : 0) + (P["p5:main"] ? 1 : 0) + (P["p5:act"] ? 1 : 0)
+    + (P["p6:tldr"] ? 1 : 0) + (P["p6:main"] ? 1 : 0) + (P["p6:act"] ? 1 : 0)
+    + (P["p7:tldr"] ? 1 : 0) + (P["p7:main"] ? 1 : 0) + (P["p7:act"] ? 1 : 0)
+    + (P["p7:low"] ? 1 : 0)
+    + (P["p9:anchor"] ? 1 : 0);
+
+  const workWithKeys = 0
+    + (P["p8:C"] ? 1 : 0)
+    + (P["p8:T"] ? 1 : 0)
+    + (P["p8:R"] ? 1 : 0)
+    + (P["p8:L"] ? 1 : 0);
+
+  const missing = { identity: [], ctrl: [], text: [], workWith: [] };
+
+  if (!fullName.trim()) missing.identity.push("identity.fullName");
+  if (!email.trim()) missing.identity.push("identity.email");
+  if (!dateLabel.trim()) missing.identity.push("identity.dateLabel");
+
+  if (!domSecond?.domKey) missing.ctrl.push("ctrl.summary.dominantKey");
+  if (!domSecond?.secondKey) missing.ctrl.push("ctrl.summary.secondKey");
+  if (!domSecond?.templateKey) missing.ctrl.push("ctrl.summary.templateKey");
+
+  if (!P["p3:tldr"]) missing.text.push("text.execSummary_tldr");
+  if (!P["p3:main"]) missing.text.push("text.execSummary");
+  if (!P["p3:act"])  missing.text.push("text.execSummary_tipact");
+
+  if (!P["p5:main"]) missing.text.push("text.frequency");
+  if (!P["p6:main"]) missing.text.push("text.sequence");
+  if (!P["p7:main"]) missing.text.push("text.theme");
+
+  if (!P["p8:C"]) missing.workWith.push("workWith.concealed");
+  if (!P["p8:T"]) missing.workWith.push("workWith.triggered");
+  if (!P["p8:R"]) missing.workWith.push("workWith.regulated");
+  if (!P["p8:L"]) missing.workWith.push("workWith.lead");
+
+  return {
+    ok: true,
+    where: "fill-template:v9:master_probe:summary",
+    domSecond: safeJson(domSecond),
+    identity: {
+      fullName: { has: !!fullName, len: fullName.length, preview: fullName.slice(0, 40) },
+      email: { has: !!email, len: email.length, preview: email.slice(0, 40) },
+      dateLabel: { has: !!dateLabel, len: dateLabel.length, preview: dateLabel.slice(0, 40) },
+    },
+    counts: {
+      questions: 0,
+      bandsKeys: bandKeys.length,
+      bandsPresent12: present12,
+      textKeys,
+      workWithKeys,
+      freqTldrExtraKeys: [],
+    },
+    missing,
   };
 }
 
@@ -541,70 +799,47 @@ export default async function handler(req, res) {
 
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
+    const domSecond = computeDomAndSecondKeys(P);
+
+    let layout = deepMerge(DEFAULT_LAYOUT, P.layout || {});
+    const { layout: layout2, applied, ignored } = applyLayoutOverridesFromUrl(layout, url);
+    layout = layout2;
+    const L = layout.pages || DEFAULT_LAYOUT.pages;
 
     if (debug) {
-      return res.status(200).json({
-        ok: true,
-        where: "fill-template:v3:after_normaliseInput",
-        lengths: {
-          p3_exec: (P["p3:exec"] || "").length,
-          p3_tldr: (P["p3:tldr"] || "").length,
-          p3_tip:  (P["p3:tip"]  || "").length,
-
-          p4_main: (P["p4:stateDeep"] || "").length,
-          p4_tldr: (P["p4:tldr"] || "").length,
-          p4_act:  (P["p4:action"] || "").length,
-
-          p5_main: (P["p5:freq"] || "").length,
-          p5_tldr: (P["p5:tldr"] || "").length,
-
-          p6_main: (P["p6:seq"] || "").length,
-          p6_tldr: (P["p6:tldr"] || "").length,
-          p6_act:  (P["p6:action"] || "").length,
-
-          p7_top: (P["p7:themesTop"] || "").length,
-          p7_top_tldr: (P["p7:themesTop_tldr"] || "").length,
-          p7_low: (P["p7:themesLow"] || "").length,
-          p7_low_tldr: (P["p7:themesLow_tldr"] || "").length,
-          p7_top_tip: (P["p7:themesTop_tip"] || "").length,
-
-          p9_anchor: (P["p9:actAnchor"] || "").length,
-
-          bandsKeys: Object.keys(P.bands || {}).length,
-        },
-        domSecond: safeJson(computeDomAndSecondKeys(P)),
-      });
+      const probe = buildMasterProbe(P, domSecond);
+      probe.layoutOverrides = { applied, ignored };
+      return res.status(200).json(probe);
     }
 
-    const { domKey, secondKey } = computeDomAndSecondKeys(P);
-    const combo = `${domKey}${secondKey}`;
-
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-    const safeCombo = validCombos.has(combo) ? combo : "CT";
+    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
     const tpl = `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`;
 
     const pdfBytes = await loadTemplateBytesLocal(tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    // Layout: default + payload overrides + URL overrides
-    let layout = mergeLayout(P.layout);
-    layout = applyLayoutOverridesFromUrl(layout, url);
-    const L = (layout && layout.pages) ? layout.pages : DEFAULT_LAYOUT.pages;
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
 
-    // --- Header name on pages 2–10 (index 1+) ---
+    // p1
+    if (pages[0] && L.p1) {
+      if (L.p1.name && P["p1:n"]) drawTextBox(pages[0], fontB, P["p1:n"], L.p1.name, { maxLines: 1 });
+      if (L.p1.date && P["p1:d"]) drawTextBox(pages[0], font,  P["p1:d"], L.p1.date, { maxLines: 1 });
+    }
+
+    // headers p2–p10
     const headerName = norm(P["p1:n"]);
     if (headerName) {
       for (let i = 1; i < pages.length; i++) {
-        const pageKey = `p${i + 1}`;
-        const box = L?.[pageKey]?.hdrName;
+        const pk = `p${i + 1}`;
+        const box = L?.[pk]?.hdrName;
         if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
       }
     }
 
-    const p1 = pages[0] || null;
     const p3 = pages[2] || null;
     const p4 = pages[3] || null;
     const p5 = pages[4] || null;
@@ -613,79 +848,69 @@ export default async function handler(req, res) {
     const p8 = pages[7] || null;
     const p9 = pages[8] || null;
 
-    /* p1: name + date */
-    if (p1 && L.p1) {
-      if (L.p1.name && P["p1:n"]) drawTextBox(p1, font, P["p1:n"], L.p1.name, { maxLines: 1 });
-      if (L.p1.date && P["p1:d"]) drawTextBox(p1, font, P["p1:d"], L.p1.date, { maxLines: 1 });
+    if (p3) {
+      if (L.p3TLDR?.domDesc) drawLabelAndBody(p3, fontB, font, "TLDR",  P["p3:tldr"], L.p3TLDR.domDesc);
+      if (L.p3main?.domDesc) drawLabelAndBody(p3, fontB, font, "",      P["p3:main"], L.p3main.domDesc);
+      if (L.p3act?.domDesc)  drawLabelAndBody(p3, fontB, font, "Action", P["p3:act"],  L.p3act.domDesc);
     }
 
-    /* p3: Exec Summary — TLDR first */
-    if (p3 && L.p3?.domDesc) {
-      const body = packSection(P["p3:tldr"], P["p3:exec"], P["p3:tip"]);
-      drawTextBox(p3, font, body, L.p3.domDesc, { maxLines: L.p3.domDesc.maxLines });
+    if (p4) {
+      if (L.p4TLDR?.spider) drawLabelAndBody(p4, fontB, font, "TLDR",  P["p4:tldr"], L.p4TLDR.spider);
+      if (L.p4main?.spider) drawLabelAndBody(p4, fontB, font, "",      P["p4:main"], L.p4main.spider);
+      if (L.p4act?.spider)  drawLabelAndBody(p4, fontB, font, "Action", P["p4:act"],  L.p4act.spider);
     }
 
-    /* p4: State deep-dive — TLDR first */
-    if (p4 && L.p4?.spider) {
-      const body = packSection(P["p4:tldr"], P["p4:stateDeep"], P["p4:action"]);
-      drawTextBox(p4, font, body, L.p4.spider, { maxLines: L.p4.spider.maxLines });
-    }
+    if (p5) {
+      if (L.p5TLDR?.seqpat) drawLabelAndBody(p5, fontB, font, "TLDR",  P["p5:tldr"], L.p5TLDR.seqpat);
+      if (L.p5main?.seqpat) drawLabelAndBody(p5, fontB, font, "",      P["p5:main"], L.p5main.seqpat);
+      if (L.p5act?.seqpat)  drawLabelAndBody(p5, fontB, font, "Action", P["p5:act"],  L.p5act.seqpat);
 
-    /* p5: Frequency — TLDR first + chart */
-    if (p5 && L.p5) {
-      if (L.p5.seqpat) {
-        const body = packSection(P["p5:tldr"], P["p5:freq"], P["p5:action"]);
-        drawTextBox(p5, font, body, L.p5.seqpat, { maxLines: L.p5.seqpat.maxLines });
-      }
-
-      if (L.p5.chart) {
-        const bandsObj = P.bands || {};
+      if (L.p5chart?.chart) {
         try {
-          await embedRadarFromBands(pdfDoc, p5, L.p5.chart, bandsObj);
+          await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p5chart.chart, P.bands || {}, P["p5:chartUrl"]);
         } catch (e) {
-          console.warn("[fill-template] Radar chart skipped:", e?.message || String(e));
+          console.warn("[fill-template:v9] Radar chart skipped:", e?.message || String(e));
         }
       }
     }
 
-    /* p6: Sequence — TLDR first */
-    if (p6 && L.p6?.themeExpl) {
-      const body = packSection(P["p6:tldr"], P["p6:seq"], P["p6:action"]);
-      drawTextBox(p6, font, body, L.p6.themeExpl, { maxLines: L.p6.themeExpl.maxLines });
+    if (p6) {
+      if (L.p6TLDR?.themeExpl) drawLabelAndBody(p6, fontB, font, "TLDR",  P["p6:tldr"], L.p6TLDR.themeExpl);
+      if (L.p6main?.themeExpl) drawLabelAndBody(p6, fontB, font, "",      P["p6:main"], L.p6main.themeExpl);
+      if (L.p6act?.themeExpl)  drawLabelAndBody(p6, fontB, font, "Action", P["p6:act"],  L.p6act.themeExpl);
     }
 
-    /* p7: Themes — TLDR first (+ optional theme tip packed into the top box) */
-    if (p7 && L.p7) {
-      if (L.p7.themesTop) {
-        const topBody = packSection(P["p7:themesTop_tldr"], P["p7:themesTop"], P["p7:themesTop_tip"]);
-        drawTextBox(p7, font, topBody, L.p7.themesTop, { maxLines: L.p7.themesTop.maxLines });
+    if (p7) {
+      if (L.p7TLDR?.themesTop) drawLabelAndBody(p7, fontB, font, "TLDR",  P["p7:tldr"], L.p7TLDR.themesTop);
+      if (L.p7main?.themesTop) drawLabelAndBody(p7, fontB, font, "",      P["p7:main"], L.p7main.themesTop);
+      if (L.p7act?.themesTop)  drawLabelAndBody(p7, fontB, font, "Action", P["p7:act"],  L.p7act.themesTop);
+
+      // ✅ themesLow right column (if provided)
+      if (L.p7?.themesLow && P["p7:low"]) {
+        drawTextBox(p7, font, P["p7:low"], L.p7.themesLow, { maxLines: L.p7.themesLow.maxLines });
       }
-      if (L.p7.themesLow) {
-        const lowBody = packSection(P["p7:themesLow_tldr"], P["p7:themesLow"], "");
-        drawTextBox(p7, font, lowBody, L.p7.themesLow, { maxLines: L.p7.themesLow.maxLines });
-      }
     }
 
-    /* p8: workWith / collaboration */
-    if (p8 && L.p8) {
-      if (L.p8.collabC && P["p8:collabC"]) drawTextBox(p8, font, P["p8:collabC"], L.p8.collabC, { maxLines: L.p8.collabC.maxLines });
-      if (L.p8.collabT && P["p8:collabT"]) drawTextBox(p8, font, P["p8:collabT"], L.p8.collabT, { maxLines: L.p8.collabT.maxLines });
-      if (L.p8.collabR && P["p8:collabR"]) drawTextBox(p8, font, P["p8:collabR"], L.p8.collabR, { maxLines: L.p8.collabR.maxLines });
-      if (L.p8.collabL && P["p8:collabL"]) drawTextBox(p8, font, P["p8:collabL"], L.p8.collabL, { maxLines: L.p8.collabL.maxLines });
+    if (p8 && L.p8grid) {
+      if (L.p8grid.collabC && P["p8:C"]) drawTextBox(p8, font, P["p8:C"], L.p8grid.collabC, { maxLines: L.p8grid.collabC.maxLines });
+      if (L.p8grid.collabT && P["p8:T"]) drawTextBox(p8, font, P["p8:T"], L.p8grid.collabT, { maxLines: L.p8grid.collabT.maxLines });
+      if (L.p8grid.collabR && P["p8:R"]) drawTextBox(p8, font, P["p8:R"], L.p8grid.collabR, { maxLines: L.p8grid.collabR.maxLines });
+      if (L.p8grid.collabL && P["p8:L"]) drawTextBox(p8, font, P["p8:L"], L.p8grid.collabL, { maxLines: L.p8grid.collabL.maxLines });
     }
 
-    /* p9: Action Anchor */
-    if (p9 && L.p9?.actAnchor && P["p9:actAnchor"]) {
-      drawTextBox(p9, font, P["p9:actAnchor"], L.p9.actAnchor, { maxLines: L.p9.actAnchor.maxLines });
+    if (p9 && L.p9?.actAnchor && P["p9:anchor"]) {
+      drawTextBox(p9, font, P["p9:anchor"], L.p9.actAnchor, { maxLines: L.p9.actAnchor.maxLines });
     }
 
     const outBytes = await pdfDoc.save();
 
+    const outName = makeOutputFilename(P["p1:n"], P["p1:d"]);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template] CRASH", err);
+    console.error("[fill-template:v9] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
