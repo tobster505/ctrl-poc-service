@@ -1,12 +1,14 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.2)
+ * CTRL PoC Export Service · fill-template (V12.3)
  *
- * V12.2 adds:
+ * V12.3 adds:
+ * - DEFAULT_LAYOUT updated to match "URL - full co-ordinates" (stored in code)
+ * - Text boxes auto-expand height when maxLines increases (fixes apparent maxLines cap)
+ *
+ * Keeps:
  * - URL layout override support (L_<pageKey>_<boxKey>_<prop>=value)
  * - Debug reports: overrides applied/ignored + reasons
  * - Deep clone layout per request to avoid serverless cross-request mutation
- *
- * Keeps:
  * - V9 Page 1 coords + Header coords p2–p8
  * - V9 chart style (polarArea) now on Page 4
  * - Backward-compatible text mapping (para1/para2 OR single block split)
@@ -116,13 +118,29 @@ function drawTextBox(page, font, text, box, opts = {}) {
   const t0 = S(text);
   if (!t0.trim()) return;
 
-  const { x, y, w, h } = rectTLtoBL(page, box);
+  const pageH = page.getHeight();
+
   const size = N(opts.size ?? box.size ?? 12);
   const lineGap = N(opts.lineGap ?? box.lineGap ?? 2);
   const maxLines = N(opts.maxLines ?? box.maxLines ?? 999);
   const alignRaw = String(opts.align ?? box.align ?? "left").toLowerCase();
   const align = (alignRaw === "centre") ? "center" : alignRaw;
   const pad = N(opts.pad ?? box.pad ?? 0);
+
+  let x = N(box.x);
+  let w = Math.max(0, N(box.w));
+  let h = Math.max(0, N(box.h));
+
+  // If maxLines is increased, auto-expand the box height so extra lines can render.
+  // (Otherwise you hit the physical height limit and it "looks like" maxLines is capped.)
+  const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
+  if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
+    const lineHeight = size + lineGap;
+    const hNeeded = (pad * 2) + size + (Math.max(0, maxLines - 1) * lineHeight);
+    h = Math.max(h, hNeeded);
+  }
+
+  const y = pageH - N(box.y) - h;
 
   if (opts.bg === true || box.bg === true) {
     page.drawRectangle({
@@ -140,7 +158,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
 
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
-    if (cursorY < y + pad) break;
 
     let dx = x + pad;
     if (align !== "left") {
@@ -379,14 +396,13 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (V9 coords + new 8-page map) ───────── */
+/* ───────── DEFAULT LAYOUT (from "URL - full co-ordinates") ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
-      name: { x: 60,  y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
-      date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left",   maxLines: 1 },
+      name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
+      date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
-
     p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -396,27 +412,27 @@ const DEFAULT_LAYOUT = {
     p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
     p3Text: {
-      exec1: { x: 25, y: 310, w: 550, h: 250, size: 15, align: "left", maxLines: 13 },
-      exec2: { x: 25, y: 570, w: 550, h: 420, size: 15, align: "left", maxLines: 22 },
+      exec1: { x: 25, y: 310, w: 550, h: 210, size: 15, align: "left", maxLines: 10 },
+      exec2: { x: 25, y: 490, w: 550, h: 520, size: 15, align: "left", maxLines: 26 },
     },
 
     p4Text: {
-      ov1: { x: 25, y: 160, w: 550, h: 240, size: 14, align: "left", maxLines: 13 },
-      ov2: { x: 25, y: 410, w: 550, h: 420, size: 14, align: "left", maxLines: 23 },
+      ov1: { x: 25, y: 160, w: 250, h: 240, size: 16, align: "left", maxLines: 20 },
+      ov2: { x: 25, y: 530, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
     p5Text: {
-      dd1: { x: 25, y: 170, w: 550, h: 240, size: 15, align: "left", maxLines: 13 },
-      dd2: { x: 25, y: 420, w: 550, h: 310, size: 15, align: "left", maxLines: 17 },
-      th1: { x: 25, y: 740, w: 550, h: 160, size: 15, align: "left", maxLines: 9 },
-      th2: { x: 25, y: 910, w: 550, h: 160, size: 15, align: "left", maxLines: 9 },
+      dd1: { x: 25, y: 170, w: 550, h: 220, size: 15, align: "left", maxLines: 50 },
+      dd2: { x: 25, y: 500, w: 550, h: 520, size: 15, align: "left", maxLines: 28 },
+      th1: { x: 25, y: 700, w: 550, h: 140, size: 15, align: "left", maxLines: 8 },
+      th2: { x: 25, y: 870, w: 550, h: 140, size: 15, align: "left", maxLines: 8 },
     },
 
     p6WorkWith: {
-      collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabR: { x: 30,  y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabR: { x: 30, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
@@ -431,7 +447,7 @@ const DEFAULT_LAYOUT = {
   },
 };
 
-/* ───────── URL layout overrides (NEW in V12.2) ───────── */
+/* ───────── URL layout overrides (kept) ───────── */
 function applyLayoutOverridesFromUrl(layoutPages, url) {
   const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
   const applied = [];
@@ -483,7 +499,6 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
       continue;
     }
 
-    // maxLines should be integer-ish
     if (prop === "maxLines") layoutPages[pageKey][boxKey][prop] = Math.max(0, Math.floor(num));
     else layoutPages[pageKey][boxKey][prop] = num;
 
@@ -617,7 +632,7 @@ function buildProbe(P, domSecond, tpl, ov) {
 
   return {
     ok: true,
-    where: "fill-template:V12.2:debug",
+    where: "fill-template:V12.3:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
 
@@ -688,7 +703,7 @@ export default async function handler(req, res) {
     // Deep-clone layout per request (avoid mutation across invocations)
     const L = safeJson(DEFAULT_LAYOUT.pages);
 
-    // Apply URL overrides (NEW)
+    // Apply URL overrides (kept)
     const ov = applyLayoutOverridesFromUrl(L, url);
 
     if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov));
@@ -723,7 +738,6 @@ export default async function handler(req, res) {
     const p5 = pages[4] || null; // page 5
     const p6 = pages[5] || null; // page 6 (workwith)
     const p7 = pages[6] || null; // page 7 (actions)
-    // p8 = pages[7] header only
 
     // Page 3 text
     if (p3) {
@@ -739,7 +753,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V12.2] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V12.3] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -777,7 +791,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V12.2] CRASH", err);
+    console.error("[fill-template:V12.3] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
