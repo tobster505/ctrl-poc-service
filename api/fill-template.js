@@ -1,10 +1,9 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.3 LOCKED COORDS)
+ * CTRL PoC Export Service · fill-template (V12.3 · 3 Actions locked)
  *
- * - DEFAULT_LAYOUT has been updated to match the exact coords you supplied.
- * - URL layout override support remains (L_<pageKey>_<boxKey>_<prop>=value)
- * - Debug reports: overrides applied/ignored + reasons
- * - Auto-expands box height when maxLines increases (prevents "fake maxLines cap")
+ * Changes in this tweak:
+ * - Only Act1–Act3 supported (Act4/Act5 removed; Act6 removed too)
+ * - DEFAULT_LAYOUT p7Actions updated to new locked coordinates for 3 acts
  */
 
 export const config = { runtime: "nodejs" };
@@ -112,8 +111,7 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Key fix: maxLines alone does not help if box height is too small.
-  // Auto-expand height to allow the extra lines to render.
+  // Auto-expand height so maxLines can actually render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -354,13 +352,11 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
 /* ───────── DEFAULT LAYOUT (LOCKED IN) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
-    // Page 1
     p1: {
       name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Headers pages 2–8
     p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -369,20 +365,17 @@ const DEFAULT_LAYOUT = {
     p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Page 3 text
     p3Text: {
       exec1: { x: 25, y: 380, w: 550, h: 250, size: 17, align: "left", maxLines: 13 },
       exec2: { x: 25, y: 590, w: 550, h: 420, size: 17, align: "left", maxLines: 22 },
     },
 
-    // Page 4 overview + chart
     p4Text: {
       ov1: { x: 25, y: 160, w: 200, h: 240, size: 17, align: "left", maxLines: 20 },
       ov2: { x: 25, y: 560, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
-    // Page 5 deep dive + themes
     p5Text: {
       dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
       dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
@@ -390,7 +383,6 @@ const DEFAULT_LAYOUT = {
       th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
     },
 
-    // Page 6 workwith
     p6WorkWith: {
       collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
@@ -398,14 +390,11 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // Page 7 actions
+    // UPDATED: only 3 actions + new coords
     p7Actions: {
-      act1: { x: 30, y: 380, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
-      act2: { x: 30, y: 460, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
-      act3: { x: 30, y: 540, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
-      act4: { x: 30, y: 620, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
-      act5: { x: 30, y: 700, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
-      act6: { x: 30, y: 765, w: 550, h: 95, size: 17, align: "left", maxLines: 5 },
+      act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
+      act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
+      act3: { x: 50,  y: 670, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
     },
   },
 };
@@ -420,10 +409,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     if (!k.startsWith("L_")) continue;
 
     const bits = k.split("_");
-    if (bits.length < 4) {
-      ignored.push({ k, v, why: "bad_key_shape", expected: "L_<pageKey>_<boxKey>_<prop>" });
-      continue;
-    }
+    if (bits.length < 4) { ignored.push({ k, v, why: "bad_key_shape" }); continue; }
 
     const pageKey = bits[1];
     const boxKey = bits[2];
@@ -436,10 +422,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     if (prop === "align") {
       const a0 = String(v || "").toLowerCase();
       const a = (a0 === "centre") ? "center" : a0;
-      if (!["left", "center", "right"].includes(a)) {
-        ignored.push({ k, v, why: "bad_align", got: a0 });
-        continue;
-      }
+      if (!["left", "center", "right"].includes(a)) { ignored.push({ k, v, why: "bad_align", got: a0 }); continue; }
       layoutPages[pageKey][boxKey][prop] = a;
       applied.push({ k, v, pageKey, boxKey, prop });
       continue;
@@ -448,9 +431,7 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
     const num = Number(v);
     if (!Number.isFinite(num)) { ignored.push({ k, v, why: "not_a_number" }); continue; }
 
-    if (prop === "maxLines") layoutPages[pageKey][boxKey][prop] = Math.max(0, Math.floor(num));
-    else layoutPages[pageKey][boxKey][prop] = num;
-
+    layoutPages[pageKey][boxKey][prop] = (prop === "maxLines") ? Math.max(0, Math.floor(num)) : num;
     applied.push({ k, v, pageKey, boxKey, prop });
   }
 
@@ -465,10 +446,8 @@ function normaliseInput(d = {}) {
   const ctrl = okObj(d.ctrl) ? d.ctrl : {};
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
-  const fullName =
-    S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
-  const dateLabel =
-    S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
+  const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
+  const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
 
   const bandsRaw =
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
@@ -496,12 +475,10 @@ function normaliseInput(d = {}) {
   const thBlock = S(text.themes || "");
   const [thA, thB] = splitToTwoParas(thBlock);
 
+  // ONLY 3 actions now
   const act1 = S(text.Act1 || text.act_1 || "");
   const act2 = S(text.Act2 || text.act_2 || "");
   const act3 = S(text.Act3 || text.act_3 || "");
-  const act4 = S(text.Act4 || text.act_4 || "");
-  const act5 = S(text.Act5 || text.act_5 || "");
-  const act6 = S(text.Act6 || text.act_6 || "");
 
   const actsArr = okArr(text.actions) ? text.actions.map((x) => S(x)) : [];
   const actFromArr = (i) => S(actsArr[i] || "");
@@ -531,9 +508,6 @@ function normaliseInput(d = {}) {
     Act1: act1 || actFromArr(0),
     Act2: act2 || actFromArr(1),
     Act3: act3 || actFromArr(2),
-    Act4: act4 || actFromArr(3),
-    Act5: act5 || actFromArr(4),
-    Act6: act6 || actFromArr(5),
 
     workWith: {
       concealed: S(workWith.concealed || ""),
@@ -553,10 +527,7 @@ function buildProbe(P, domSecond, tpl, ov, L) {
     where: "fill-template:V12.3:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
-    identity: {
-      fullName: P.identity.fullName,
-      dateLabel: P.identity.dateLabel,
-    },
+    identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
     textLengths: {
       exec1: S(P.exec_summary_para1).length,
       exec2: S(P.exec_summary_para2).length,
@@ -569,9 +540,6 @@ function buildProbe(P, domSecond, tpl, ov, L) {
       act1: S(P.Act1).length,
       act2: S(P.Act2).length,
       act3: S(P.Act3).length,
-      act4: S(P.Act4).length,
-      act5: S(P.Act5).length,
-      act6: S(P.Act6).length,
     },
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
@@ -579,10 +547,10 @@ function buildProbe(P, domSecond, tpl, ov, L) {
       applied: ov?.applied || [],
       ignored: ov?.ignored || [],
       resolvedExamples: {
-        p4Text_ov1: safeJson(L?.p4Text?.ov1 || {}),
-        p5Text_th2: safeJson(L?.p5Text?.th2 || {}),
+        p7Actions_act1: safeJson(L?.p7Actions?.act1 || {}),
+        p7Actions_act2: safeJson(L?.p7Actions?.act2 || {}),
+        p7Actions_act3: safeJson(L?.p7Actions?.act3 || {}),
       },
-      note: "Use keys like L_p3Text_exec1_y=520 (pageKey=p3Text, boxKey=exec1)",
     },
   };
 }
@@ -601,19 +569,11 @@ export default async function handler(req, res) {
       secondKey: payload?.secondKey
     });
 
-    // Template selection & fallback (unchanged)
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
     const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
-    const tpl = {
-      combo: domSecond.templateKey,
-      safeCombo,
-      tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`,
-    };
+    const tpl = { combo: domSecond.templateKey, safeCombo, tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf` };
 
-    // clone layout per request
     const L = safeJson(DEFAULT_LAYOUT.pages);
-
-    // apply URL overrides (optional)
     const ov = applyLayoutOverridesFromUrl(L, url);
 
     if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
@@ -642,9 +602,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // page mapping (8 pages)
     const p3 = pages[2] || null;
-    const p4 = pages[3] || null; // chart page
+    const p4 = pages[3] || null;
     const p5 = pages[4] || null;
     const p6 = pages[5] || null;
     const p7 = pages[6] || null;
@@ -678,13 +637,11 @@ export default async function handler(req, res) {
       drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
     }
 
+    // Only 3 actions now
     if (p7) {
       drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
       drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
       drawTextBox(p7, font, P.Act3, L.p7Actions.act3);
-      drawTextBox(p7, font, P.Act4, L.p7Actions.act4);
-      drawTextBox(p7, font, P.Act5, L.p7Actions.act5);
-      drawTextBox(p7, font, P.Act6, L.p7Actions.act6);
     }
 
     const outBytes = await pdfDoc.save();
