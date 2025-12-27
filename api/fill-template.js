@@ -1,19 +1,17 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.1)
+ * CTRL PoC Export Service · fill-template (V12.2)
  *
- * V12.1 fixes:
- * 1) Reinstates V9 coordinates for:
- *    - Page 1 FullName + Date
- *    - Header name on pages 2–8
- * 2) Reinstates V9 chart rendering (polarArea, colours, style),
- *    but renders it on Page 4 (not Page 5).
- * 3) Fixes "Gen text missing" by accepting BOTH:
- *    - new keys: exec_summary_para1 / exec_summary_para2, etc
- *    - old single-block keys: exec_summary, ctrl_overview, ctrl_deepdive, themes
- *      and splitting into para1/para2 when needed.
- * 4) Keeps template selection + fallback behaviour unchanged.
- * 5) Keeps base64 data decoding unchanged.
- * 6) Adds robust &debug=1 probe (every major key + lengths + missing list).
+ * V12.2 adds:
+ * - URL layout override support (L_<pageKey>_<boxKey>_<prop>=value)
+ * - Debug reports: overrides applied/ignored + reasons
+ * - Deep clone layout per request to avoid serverless cross-request mutation
+ *
+ * Keeps:
+ * - V9 Page 1 coords + Header coords p2–p8
+ * - V9 chart style (polarArea) now on Page 4
+ * - Backward-compatible text mapping (para1/para2 OR single block split)
+ * - Template selection + fallback unchanged
+ * - Base64 data decoding unchanged
  */
 
 export const config = { runtime: "nodejs" };
@@ -160,10 +158,8 @@ function drawTextBox(page, font, text, box, opts = {}) {
 function splitToTwoParas(s) {
   const raw = S(s).replace(/\r/g, "").trim();
   if (!raw) return ["", ""];
-  // Prefer blank-line split
   const parts = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) return [parts[0], parts.slice(1).join("\n\n")];
-  // Fallback: sentence split roughly halfway
   const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
   if (sentences.length >= 2) {
     const mid = Math.ceil(sentences.length / 2);
@@ -386,13 +382,11 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
 /* ───────── DEFAULT LAYOUT (V9 coords + new 8-page map) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
-    // Page 1 — V9 coords (keep)
     p1: {
       name: { x: 60,  y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left",   maxLines: 1 },
     },
 
-    // Header name on pages 2–8 — V9 coords (keep)
     p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -401,21 +395,17 @@ const DEFAULT_LAYOUT = {
     p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Page 3 — Executive summary (your new para1/para2 boxes)
     p3Text: {
       exec1: { x: 25, y: 310, w: 550, h: 250, size: 15, align: "left", maxLines: 13 },
       exec2: { x: 25, y: 570, w: 550, h: 420, size: 15, align: "left", maxLines: 22 },
     },
 
-    // Page 4 — CTRL overview + CHART (chart moved here)
     p4Text: {
       ov1: { x: 25, y: 160, w: 550, h: 240, size: 14, align: "left", maxLines: 13 },
       ov2: { x: 25, y: 410, w: 550, h: 420, size: 14, align: "left", maxLines: 23 },
-      // chart box: use the SAME V9 chart coords, but on Page 4 now
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
-    // Page 5 — Deepdive + Themes
     p5Text: {
       dd1: { x: 25, y: 170, w: 550, h: 240, size: 15, align: "left", maxLines: 13 },
       dd2: { x: 25, y: 420, w: 550, h: 310, size: 15, align: "left", maxLines: 17 },
@@ -423,7 +413,6 @@ const DEFAULT_LAYOUT = {
       th2: { x: 25, y: 910, w: 550, h: 160, size: 15, align: "left", maxLines: 9 },
     },
 
-    // Page 6 — WorkWith (4 boxes)
     p6WorkWith: {
       collabC: { x: 30,  y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
       collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
@@ -431,7 +420,6 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // Page 7 — Actions (Act1..Act6)
     p7Actions: {
       act1: { x: 30, y: 240, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
       act2: { x: 30, y: 345, w: 550, h: 95, size: 16, align: "left", maxLines: 5 },
@@ -443,7 +431,69 @@ const DEFAULT_LAYOUT = {
   },
 };
 
-/* ───────── input normaliser (NEW KEY SUPPORT + backward compatible) ───────── */
+/* ───────── URL layout overrides (NEW in V12.2) ───────── */
+function applyLayoutOverridesFromUrl(layoutPages, url) {
+  const allowed = new Set(["x", "y", "w", "h", "size", "maxLines", "align"]);
+  const applied = [];
+  const ignored = [];
+
+  for (const [k, v] of url.searchParams.entries()) {
+    if (!k.startsWith("L_")) continue;
+
+    // Expected: L_<pageKey>_<boxKey>_<prop>
+    // Example:  L_p3Text_exec1_y=520
+    const bits = k.split("_");
+    if (bits.length < 4) {
+      ignored.push({ k, v, why: "bad_key_shape", expected: "L_<pageKey>_<boxKey>_<prop>" });
+      continue;
+    }
+
+    const pageKey = bits[1];
+    const boxKey = bits[2];
+    const prop = bits.slice(3).join("_");
+
+    if (!layoutPages?.[pageKey]) {
+      ignored.push({ k, v, why: "unknown_page", pageKey });
+      continue;
+    }
+    if (!layoutPages?.[pageKey]?.[boxKey]) {
+      ignored.push({ k, v, why: "unknown_box", pageKey, boxKey });
+      continue;
+    }
+    if (!allowed.has(prop)) {
+      ignored.push({ k, v, why: "unsupported_prop", prop });
+      continue;
+    }
+
+    if (prop === "align") {
+      const a0 = String(v || "").toLowerCase();
+      const a = (a0 === "centre") ? "center" : a0;
+      if (!["left", "center", "right"].includes(a)) {
+        ignored.push({ k, v, why: "bad_align", got: a0 });
+        continue;
+      }
+      layoutPages[pageKey][boxKey][prop] = a;
+      applied.push({ k, v, pageKey, boxKey, prop });
+      continue;
+    }
+
+    const num = Number(v);
+    if (!Number.isFinite(num)) {
+      ignored.push({ k, v, why: "not_a_number" });
+      continue;
+    }
+
+    // maxLines should be integer-ish
+    if (prop === "maxLines") layoutPages[pageKey][boxKey][prop] = Math.max(0, Math.floor(num));
+    else layoutPages[pageKey][boxKey][prop] = num;
+
+    applied.push({ k, v, pageKey, boxKey, prop });
+  }
+
+  return { applied, ignored, layoutPages };
+}
+
+/* ───────── input normaliser (backward compatible) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
@@ -456,14 +506,12 @@ function normaliseInput(d = {}) {
   const dateLabel =
     S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
 
-  // Bands (chart): prefer ctrl.summary.ctrl12 then ctrl12/bands
   const bandsRaw =
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
     (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
     (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     {};
 
-  // ---- Text mapping: NEW keys first, else fallback + split ----
   const exec1 = S(text.exec_summary_para1 || "");
   const exec2 = S(text.exec_summary_para2 || "");
   const execBlock = S(text.exec_summary || "");
@@ -484,7 +532,6 @@ function normaliseInput(d = {}) {
   const thBlock = S(text.themes || "");
   const [thA, thB] = splitToTwoParas(thBlock);
 
-  // Actions: prefer explicit Act1..Act6, else text.act_1..act_6, else array
   const act1 = S(text.Act1 || text.act_1 || "");
   const act2 = S(text.Act2 || text.act_2 || "");
   const act3 = S(text.Act3 || text.act_3 || "");
@@ -505,7 +552,6 @@ function normaliseInput(d = {}) {
     identity: { fullName, dateLabel },
     bands: bandsRaw,
 
-    // resolved text (always filled if any source exists)
     exec_summary_para1: exec1 || execA,
     exec_summary_para2: exec2 || execB,
 
@@ -536,8 +582,8 @@ function normaliseInput(d = {}) {
   };
 }
 
-/* ───────── debug probe ───────── */
-function buildProbe(P, domSecond, tpl) {
+/* ───────── debug probe (updated for overrides) ───────── */
+function buildProbe(P, domSecond, tpl, ov) {
   const bands = P.bands || {};
   const required12 = [
     "C_low","C_mid","C_high","T_low","T_mid","T_high",
@@ -571,15 +617,17 @@ function buildProbe(P, domSecond, tpl) {
 
   return {
     ok: true,
-    where: "fill-template:V12.1:debug",
+    where: "fill-template:V12.2:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
+
     identity: {
       fullName: P.identity.fullName,
       dateLabel: P.identity.dateLabel,
       nameLen: P.identity.fullName.length,
       dateLen: P.identity.dateLabel.length,
     },
+
     bands: {
       keysCount: keys.length,
       present12Count: required12.length - missing12.length,
@@ -587,17 +635,29 @@ function buildProbe(P, domSecond, tpl) {
       anyPositive: Object.values(bands).some((v) => Number(v) > 0),
       sample: Object.fromEntries(required12.slice(0, 6).map((k) => [k, bands[k]])),
     },
+
     textLengths: Object.fromEntries(Object.entries(text).map(([k, v]) => [k, v.length])),
+
     chart: {
       chartUrlProvided: !!P.chartUrl,
-      chartUrlPreview: P.chartUrl ? P.chartUrl.slice(0, 80) : "",
+      chartUrlPreview: P.chartUrl ? P.chartUrl.slice(0, 120) : "",
     },
+
     workWithLengths: {
       concealed: (P.workWith?.concealed || "").length,
       triggered: (P.workWith?.triggered || "").length,
       regulated: (P.workWith?.regulated || "").length,
       lead: (P.workWith?.lead || "").length,
     },
+
+    layoutOverrides: {
+      appliedCount: ov?.applied?.length || 0,
+      ignoredCount: ov?.ignored?.length || 0,
+      applied: ov?.applied || [],
+      ignored: ov?.ignored || [],
+      note: "Use keys like L_p3Text_exec1_y=520 (pageKey=p3Text, boxKey=exec1)",
+    },
+
     warnings,
   };
 }
@@ -610,7 +670,11 @@ export default async function handler(req, res) {
 
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
-    const domSecond = computeDomAndSecondKeys({ raw: payload, domKey: payload?.dominantKey, secondKey: payload?.secondKey });
+    const domSecond = computeDomAndSecondKeys({
+      raw: payload,
+      domKey: payload?.dominantKey,
+      secondKey: payload?.secondKey
+    });
 
     // Template selection & fallback: unchanged
     const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
@@ -621,7 +685,13 @@ export default async function handler(req, res) {
       tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf`,
     };
 
-    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl));
+    // Deep-clone layout per request (avoid mutation across invocations)
+    const L = safeJson(DEFAULT_LAYOUT.pages);
+
+    // Apply URL overrides (NEW)
+    const ov = applyLayoutOverridesFromUrl(L, url);
+
+    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov));
 
     const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
     const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -630,7 +700,6 @@ export default async function handler(req, res) {
     const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
-    const L = DEFAULT_LAYOUT.pages;
 
     // Page 1
     if (pages[0]) {
@@ -670,7 +739,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V12.1] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V12.2] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -708,7 +777,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V12.1] CRASH", err);
+    console.error("[fill-template:V12.2] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
