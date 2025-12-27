@@ -30,10 +30,14 @@ const S = (v, fb = "") => (v == null ? String(fb) : String(v));
 const N = (v, fb = 0) => (Number.isFinite(+v) ? +v : fb);
 const norm = (s) => S(s).replace(/\s+/g, " ").trim();
 
+const okObj = (o) => o && typeof o === "object" && !Array.isArray(o);
+const okArr = (a) => Array.isArray(a);
+
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch { return { _error: "Could not serialise debug object" }; }
 }
+
 
 /* ───────── TL→BL rect helper ───────── */
 const rectTLtoBL = (page, box, inset = 0) => {
