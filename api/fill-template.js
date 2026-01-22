@@ -2,8 +2,8 @@
  * CTRL PoC Export Service · fill-template (V12.3 · 3 Actions locked)
  *
  * Changes in this tweak:
- * - Only Act1–Act3 supported (Act4/Act5 removed; Act6 removed too)
- * - DEFAULT_LAYOUT p7Actions updated to new locked coordinates for 3 acts
+ * - Page mapping shifted by +1 from page 3 onwards (new page 3 header-only)
+ * - Header name now rendered on pages 2–9
  */
 
 export const config = { runtime: "nodejs" };
@@ -365,6 +365,10 @@ const DEFAULT_LAYOUT = {
     p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
+    // NEW: header for page 9 (same box)
+    p9: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+
+    // NOTE: layout keys stay the same; only page attachment shifts in the handler below
     p3Text: {
       exec1: { x: 25, y: 380, w: 550, h: 250, size: 17, align: "left", maxLines: 13 },
       exec2: { x: 25, y: 590, w: 550, h: 420, size: 17, align: "left", maxLines: 22 },
@@ -390,7 +394,7 @@ const DEFAULT_LAYOUT = {
       collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
     },
 
-    // UPDATED: only 3 actions + new coords
+    // UPDATED: only 3 actions + new coords (layout unchanged; attachment shifts below)
     p7Actions: {
       act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
@@ -592,56 +596,62 @@ export default async function handler(req, res) {
       drawTextBox(pages[0], font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Header name pages 2–8
+    // Header name pages 2–9 (was 2–8)
     const headerName = norm(P.identity.fullName);
     if (headerName) {
-      for (let i = 1; i < Math.min(pages.length, 8); i++) {
+      for (let i = 1; i < Math.min(pages.length, 9); i++) {
         const pk = `p${i + 1}`;
         const box = L?.[pk]?.hdrName;
         if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
       }
     }
 
-    const p3 = pages[2] || null;
-    const p4 = pages[3] || null;
-    const p5 = pages[4] || null;
-    const p6 = pages[5] || null;
-    const p7 = pages[6] || null;
+    // New page layout shift:
+    // p3 = header only (no text)
+    const p4 = pages[3] || null; // exec_summary (was p3)
+    const p5 = pages[4] || null; // overview + chart (was p4)
+    const p6 = pages[5] || null; // deepdive + themes (was p5)
+    const p7 = pages[6] || null; // workWith (was p6)
+    const p8 = pages[7] || null; // actions (was p7)
 
-    if (p3) {
-      drawTextBox(p3, font, P.exec_summary_para1, L.p3Text.exec1);
-      drawTextBox(p3, font, P.exec_summary_para2, L.p3Text.exec2);
+    // Exec summary now on page 4 (was page 3)
+    if (p4) {
+      drawTextBox(p4, font, P.exec_summary_para1, L.p3Text.exec1);
+      drawTextBox(p4, font, P.exec_summary_para2, L.p3Text.exec2);
     }
 
-    if (p4) {
-      drawTextBox(p4, font, P.ctrl_overview_para1, L.p4Text.ov1);
-      drawTextBox(p4, font, P.ctrl_overview_para2, L.p4Text.ov2);
+    // Overview + chart now on page 5 (was page 4)
+    if (p5) {
+      drawTextBox(p5, font, P.ctrl_overview_para1, L.p4Text.ov1);
+      drawTextBox(p5, font, P.ctrl_overview_para2, L.p4Text.ov2);
       try {
-        await embedRadarFromBandsOrUrl(pdfDoc, p4, L.p4Text.chart, P.bands || {}, P.chartUrl);
+        await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
         console.warn("[fill-template:V12.3] Chart skipped:", e?.message || String(e));
       }
     }
 
-    if (p5) {
-      drawTextBox(p5, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
-      drawTextBox(p5, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
-      drawTextBox(p5, font, P.themes_para1, L.p5Text.th1);
-      drawTextBox(p5, font, P.themes_para2, L.p5Text.th2);
-    }
-
+    // Deepdive + themes now on page 6 (was page 5)
     if (p6) {
-      drawTextBox(p6, font, P.workWith?.concealed, L.p6WorkWith.collabC);
-      drawTextBox(p6, font, P.workWith?.triggered, L.p6WorkWith.collabT);
-      drawTextBox(p6, font, P.workWith?.regulated, L.p6WorkWith.collabR);
-      drawTextBox(p6, font, P.workWith?.lead,      L.p6WorkWith.collabL);
+      drawTextBox(p6, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
+      drawTextBox(p6, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
+      drawTextBox(p6, font, P.themes_para1, L.p5Text.th1);
+      drawTextBox(p6, font, P.themes_para2, L.p5Text.th2);
     }
 
-    // Only 3 actions now
+    // WorkWith now on page 7 (was page 6)
     if (p7) {
-      drawTextBox(p7, font, P.Act1, L.p7Actions.act1);
-      drawTextBox(p7, font, P.Act2, L.p7Actions.act2);
-      drawTextBox(p7, font, P.Act3, L.p7Actions.act3);
+      drawTextBox(p7, font, P.workWith?.concealed, L.p6WorkWith.collabC);
+      drawTextBox(p7, font, P.workWith?.triggered, L.p6WorkWith.collabT);
+      drawTextBox(p7, font, P.workWith?.regulated, L.p6WorkWith.collabR);
+      drawTextBox(p7, font, P.workWith?.lead,      L.p6WorkWith.collabL);
+    }
+
+    // Only 3 actions now — now on page 8 (was page 7)
+    if (p8) {
+      drawTextBox(p8, font, P.Act1, L.p7Actions.act1);
+      drawTextBox(p8, font, P.Act2, L.p7Actions.act2);
+      drawTextBox(p8, font, P.Act3, L.p7Actions.act3);
     }
 
     const outBytes = await pdfDoc.save();
