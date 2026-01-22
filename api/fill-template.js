@@ -370,13 +370,13 @@ const DEFAULT_LAYOUT = {
 
     // NOTE: layout keys stay the same; only page attachment shifts in the handler below
     p3Text: {
-      exec1: { x: 25, y: 380, w: 550, h: 250, size: 17, align: "left", maxLines: 13 },
-      exec2: { x: 25, y: 590, w: 550, h: 420, size: 17, align: "left", maxLines: 22 },
+      exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
+      exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
     },
 
     p4Text: {
-      ov1: { x: 25, y: 160, w: 200, h: 240, size: 17, align: "left", maxLines: 20 },
-      ov2: { x: 25, y: 560, w: 550, h: 420, size: 17, align: "left", maxLines: 23 },
+      ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
+      ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
       chart: { x: 250, y: 160, w: 320, h: 320 },
     },
 
@@ -388,10 +388,10 @@ const DEFAULT_LAYOUT = {
     },
 
     p6WorkWith: {
-      collabC: { x: 30, y: 300, w: 270, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 300, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabR: { x: 30, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
-      collabL: { x: 320, y: 575, w: 260, h: 420, size: 14, align: "left", maxLines: 14 },
+      collabC: { x: 30, y: 300, w: 270, h: 420, size: 15, align: "left", maxLines: 14 },
+      collabT: { x: 320, y: 300, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
+      collabR: { x: 30, y: 575, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
+      collabL: { x: 320, y: 575, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
     },
 
     // UPDATED: only 3 actions + new coords (layout unchanged; attachment shifts below)
