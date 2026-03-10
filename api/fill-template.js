@@ -1,9 +1,14 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.3 · 3 Actions locked)
+ * CTRL PoC Export Service · fill-template (V12.4 · 3 Actions locked)
  *
- * Changes in this tweak:
+ * Changes in this update:
  * - Page mapping shifted by +1 from page 3 onwards (new page 3 header-only)
  * - Header name now rendered on pages 2–9
+ * - FIXED: dominant / second state detection now supports current Botpress payload:
+ *   - ctrl.dominantKey
+ *   - ctrl.secondKey
+ *   - ctrl.summary.results.dominant
+ *   - ctrl.summary.results.secondState
  */
 
 export const config = { runtime: "nodejs" };
@@ -216,14 +221,18 @@ function resolveStateKey(any) {
 
 function computeDomAndSecondKeys(P) {
   const raw = P.raw || {};
-  const ctrl = raw.ctrl || {};
-  const summary = (ctrl.summary || raw.ctrl?.summary || {}) || {};
+  const ctrl = okObj(raw.ctrl) ? raw.ctrl : {};
+  const summary = okObj(ctrl.summary) ? ctrl.summary : {};
+  const results = okObj(summary.results) ? summary.results : {};
 
   const domKey =
     resolveStateKey(P.domKey) ||
     resolveStateKey(raw.dominantKey) ||
+    resolveStateKey(ctrl.dominantKey) ||
+    resolveStateKey(results.dominant) ||
     resolveStateKey(summary.dominant) ||
     resolveStateKey(summary.domState) ||
+    resolveStateKey(ctrl.dominant) ||
     resolveStateKey(raw.ctrl?.dominant) ||
     resolveStateKey(raw.domState) ||
     "R";
@@ -231,7 +240,10 @@ function computeDomAndSecondKeys(P) {
   const secondKey =
     resolveStateKey(P.secondKey) ||
     resolveStateKey(raw.secondKey) ||
+    resolveStateKey(ctrl.secondKey) ||
+    resolveStateKey(results.secondState) ||
     resolveStateKey(summary.secondState) ||
+    resolveStateKey(ctrl.secondState) ||
     resolveStateKey(raw.secondState) ||
     (domKey === "R" ? "T" : "R");
 
@@ -451,7 +463,15 @@ function normaliseInput(d = {}) {
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
 
   const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
-  const dateLabel = S(identity.dateLabel || d.dateLbl || d.date || d.Date || summary?.dateLbl || "").trim();
+  const dateLabel = S(
+    identity.dateLabel ||
+    d.dateLbl ||
+    d.dateLabel ||
+    d.date ||
+    d.Date ||
+    summary?.dateLbl ||
+    ""
+  ).trim();
 
   const bandsRaw =
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
@@ -528,10 +548,20 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, tpl, ov, L) {
   return {
     ok: true,
-    where: "fill-template:V12.3:debug",
+    where: "fill-template:V12.4:debug",
     template: tpl,
     domSecond: safeJson(domSecond),
     identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
+    resolvedFrom: {
+      rawDominantKey: P.raw?.dominantKey || "",
+      rawSecondKey: P.raw?.secondKey || "",
+      ctrlDominantKey: P.raw?.ctrl?.dominantKey || "",
+      ctrlSecondKey: P.raw?.ctrl?.secondKey || "",
+      ctrlDominant: P.raw?.ctrl?.dominant || "",
+      ctrlSecondState: P.raw?.ctrl?.secondState || "",
+      summaryDominant: P.raw?.ctrl?.summary?.results?.dominant || "",
+      summarySecond: P.raw?.ctrl?.summary?.results?.secondState || ""
+    },
     textLengths: {
       exec1: S(P.exec_summary_para1).length,
       exec2: S(P.exec_summary_para2).length,
@@ -627,7 +657,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p4Text.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V12.3] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V12.4] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -662,7 +692,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V12.3] CRASH", err);
+    console.error("[fill-template:V12.4] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
