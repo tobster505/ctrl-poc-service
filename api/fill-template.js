@@ -1,5 +1,5 @@
 /**
- * CTRL PoC Export Service · fill-template (V13.0 · new user profile contract)
+ * CTRL PoC Export Service · fill-template (V13.1 · new user profile contract)
  *
  * Changes in this update:
  * - Uses the NEW user payload contract:
@@ -31,6 +31,9 @@
  * - True PDF fallback support:
  *   CTRL_PoC_Assessment_Profile_fallback.pdf
  * - Retains debug mode (?debug=1)
+ * - POST is now the primary transport
+ * - Accepts both raw JSON payloads and wrapped bodies like { data: payload }
+ * - GET ?data=... fallback retained only for backwards compatibility
  */
 
 export const config = { runtime: "nodejs" };
@@ -241,7 +244,19 @@ async function readPayload(req) {
     const chunks = [];
     for await (const ch of req) chunks.push(ch);
     const raw = Buffer.concat(chunks).toString("utf8") || "{}";
-    try { return JSON.parse(raw); } catch { return {}; }
+
+    let parsed = {};
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+
+    if (okObj(parsed?.data)) return parsed.data;
+    if (okObj(parsed?.payload)) return parsed.payload;
+    if (okObj(parsed?.body)) return parsed.body;
+    if (okObj(parsed)) return parsed;
+    return {};
   }
 
   const url = new URL(req.url, "http://localhost");
@@ -250,7 +265,11 @@ async function readPayload(req) {
 
   try {
     const raw = Buffer.from(dataB64, "base64").toString("utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (okObj(parsed?.data)) return parsed.data;
+    if (okObj(parsed?.payload)) return parsed.payload;
+    if (okObj(parsed?.body)) return parsed.body;
+    return okObj(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -594,7 +613,7 @@ function normaliseInput(d = {}) {
 function buildProbe(P, domSecond, templateInfo, ov, L) {
   return {
     ok: true,
-    where: "fill-template:V13.0:debug",
+    where: "fill-template:V13.1:debug",
     templateSelection: safeJson(templateInfo),
     domSecond: safeJson(domSecond),
     identity: {
@@ -650,6 +669,26 @@ export default async function handler(req, res) {
   try {
     const url = new URL(req.url, "http://localhost");
     const debug = url.searchParams.get("debug") === "1";
+    const method = String(req.method || "GET").toUpperCase();
+
+    if (!["GET", "POST"].includes(method)) {
+      res.setHeader("Allow", "GET, POST");
+      return res.status(405).json({
+        ok: false,
+        error: `Method ${method} not allowed`,
+        allowed: ["GET", "POST"]
+      });
+    }
+
+    if (method === "GET" && !debug) {
+      const hasLegacyData = !!url.searchParams.get("data");
+      if (!hasLegacyData) {
+        return res.status(400).json({
+          ok: false,
+          error: "No payload supplied. Use POST with a JSON body, or GET only with legacy ?data=... support."
+        });
+      }
+    }
 
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
@@ -759,7 +798,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p6, L.p6Distribution.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V13.0] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V13.1] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -819,7 +858,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V13.0] CRASH", err);
+    console.error("[fill-template:V13.1] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
