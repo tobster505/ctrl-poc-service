@@ -1,14 +1,36 @@
 /**
- * CTRL PoC Export Service · fill-template (V12.4 · 3 Actions locked)
+ * CTRL PoC Export Service · fill-template (V13.0 · new user profile contract)
  *
  * Changes in this update:
- * - Page mapping shifted by +1 from page 3 onwards (new page 3 header-only)
- * - Header name now rendered on pages 2–9
- * - FIXED: dominant / second state detection now supports current Botpress payload:
- *   - ctrl.dominantKey
- *   - ctrl.secondKey
- *   - ctrl.summary.results.dominant
- *   - ctrl.summary.results.secondState
+ * - Uses the NEW user payload contract:
+ *   - text.snapshot
+ *   - text.chart_overview
+ *   - text.awareness_movement
+ *   - text.themes
+ *   - text.interactions_with_others
+ *   - text.actions / act_1..act_3
+ * - Uses sanitiser paragraph-contract outputs:
+ *   - snapshot_p1..p4
+ *   - chart_p1..p5
+ *   - move_p1..p5
+ *   - themes_p1..p2
+ *   - interact_c / interact_t / interact_r / interact_l
+ * - Supports NEW 16-page user template structure:
+ *   1  Cover
+ *   2  Table of Contents
+ *   3  How to Read This Profile
+ *   4–5  Snapshot
+ *   6–8  Distribution
+ *   9–11 Movement
+ *   12 Theme Overview
+ *   13–14 Interaction with Others
+ *   15 Actions
+ *   16 Legal
+ * - Correct template selection based on dominant + second key:
+ *   e.g. RL -> CTRL_PoC_Assessment_Profile_template_RL.pdf
+ * - True PDF fallback support:
+ *   CTRL_PoC_Assessment_Profile_fallback.pdf
+ * - Retains debug mode (?debug=1)
  */
 
 export const config = { runtime: "nodejs" };
@@ -39,9 +61,11 @@ function clampStrForFilename(s) {
     .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
+
 function parseDateLabelToYYYYMMDD(dateLbl) {
   const s = S(dateLbl).trim();
-  const m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+
+  const m = s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})$/);
   if (m) {
     const dd = String(m[1]).padStart(2, "0");
     const monRaw = m[2].toLowerCase();
@@ -63,10 +87,13 @@ function parseDateLabelToYYYYMMDD(dateLbl) {
     const mm = map[monRaw] || map[monRaw.slice(0, 3)];
     if (mm) return `${yyyy}-${mm}-${dd}`;
   }
+
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
   return clampStrForFilename(s || "date");
 }
+
 function makeOutputFilename(fullName, dateLbl) {
   const parts = S(fullName).trim().split(/\s+/).filter(Boolean);
   const first = parts[0] || "First";
@@ -82,24 +109,37 @@ function wrapText(font, text, size, w) {
   const raw = S(text);
   const paragraphs = raw.split("\n");
   const lines = [];
+
   for (const para of paragraphs) {
     const words = para.split(/\s+/).filter(Boolean);
     let line = "";
-    if (!words.length) { lines.push(""); continue; }
+
+    if (!words.length) {
+      lines.push("");
+      continue;
+    }
+
     for (const word of words) {
       const test = line ? `${line} ${word}` : word;
       const width = font.widthOfTextAtSize(test, size);
+
       if (width <= w) line = test;
-      else { if (line) lines.push(line); line = word; }
+      else {
+        if (line) lines.push(line);
+        line = word;
+      }
     }
+
     if (line) lines.push(line);
   }
+
   while (lines.length && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
 
 function drawTextBox(page, font, text, box, opts = {}) {
   if (!page || !font || !box) return;
+
   const t0 = S(text);
   if (!t0.trim()) return;
 
@@ -116,7 +156,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   let w = Math.max(0, N(box.w));
   let h = Math.max(0, N(box.h));
 
-  // Auto-expand height so maxLines can actually render.
   const autoExpand = (opts.autoExpand ?? box.autoExpand ?? true) !== false;
   if (autoExpand && Number.isFinite(maxLines) && maxLines > 0) {
     const lineHeight = size + lineGap;
@@ -125,7 +164,6 @@ function drawTextBox(page, font, text, box, opts = {}) {
   }
 
   const y = pageH - N(box.y) - h;
-
   const innerW = Math.max(0, w - pad * 2);
   const lines = wrapText(font, t0.replace(/\r/g, ""), size, innerW).slice(0, maxLines);
 
@@ -135,33 +173,43 @@ function drawTextBox(page, font, text, box, opts = {}) {
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
     let dx = x + pad;
+
     if (align !== "left") {
       const lw = font.widthOfTextAtSize(ln, size);
       if (align === "center") dx = x + (w - lw) / 2;
       if (align === "right") dx = x + w - pad - lw;
     }
-    page.drawText(ln, { x: dx, y: cursorY, size, font, color: rgb(0, 0, 0) });
+
+    page.drawText(ln, {
+      x: dx,
+      y: cursorY,
+      size,
+      font,
+      color: rgb(0, 0, 0)
+    });
+
     cursorY -= lineHeight;
   }
 }
 
-/* ───────── paragraph splitting ───────── */
-function splitToTwoParas(s) {
-  const raw = S(s).replace(/\r/g, "").trim();
-  if (!raw) return ["", ""];
-  const parts = raw.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (parts.length >= 2) return [parts[0], parts.slice(1).join("\n\n")];
-  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
-  if (sentences.length >= 2) {
-    const mid = Math.ceil(sentences.length / 2);
-    return [sentences.slice(0, mid).join(" ").trim(), sentences.slice(mid).join(" ").trim()];
-  }
-  return [raw, ""];
+/* ───────── paragraph helpers ───────── */
+function splitParasFixed(raw, expected) {
+  const parts = S(raw)
+    .replace(/\r/g, "")
+    .trim()
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  while (parts.length < expected) parts.push("");
+  return parts.slice(0, expected);
 }
 
 /* ───────── template loader ───────── */
 async function loadTemplateBytesLocal(fname) {
-  if (!fname.endsWith(".pdf")) throw new Error(`Invalid template filename: ${fname}`);
+  if (!fname.endsWith(".pdf")) {
+    throw new Error(`Invalid template filename: ${fname}`);
+  }
 
   const __file = fileURLToPath(import.meta.url);
   const __dir = path.dirname(__file);
@@ -175,8 +223,11 @@ async function loadTemplateBytesLocal(fname) {
 
   let lastErr;
   for (const pth of candidates) {
-    try { return await fs.readFile(pth); }
-    catch (err) { lastErr = err; }
+    try {
+      return { bytes: await fs.readFile(pth), path: pth };
+    } catch (err) {
+      lastErr = err;
+    }
   }
 
   throw new Error(
@@ -226,31 +277,26 @@ function computeDomAndSecondKeys(P) {
   const results = okObj(summary.results) ? summary.results : {};
 
   const domKey =
-    resolveStateKey(P.domKey) ||
-    resolveStateKey(raw.dominantKey) ||
     resolveStateKey(ctrl.dominantKey) ||
     resolveStateKey(results.dominant) ||
     resolveStateKey(summary.dominant) ||
-    resolveStateKey(summary.domState) ||
-    resolveStateKey(ctrl.dominant) ||
-    resolveStateKey(raw.ctrl?.dominant) ||
-    resolveStateKey(raw.domState) ||
+    resolveStateKey(raw.dominantKey) ||
+    resolveStateKey(raw.domKey) ||
+    resolveStateKey(raw.dominant) ||
     "R";
 
   const secondKey =
-    resolveStateKey(P.secondKey) ||
-    resolveStateKey(raw.secondKey) ||
     resolveStateKey(ctrl.secondKey) ||
     resolveStateKey(results.secondState) ||
     resolveStateKey(summary.secondState) ||
-    resolveStateKey(ctrl.secondState) ||
+    resolveStateKey(raw.secondKey) ||
     resolveStateKey(raw.secondState) ||
-    (domKey === "R" ? "T" : "R");
+    "T";
 
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── chart embed (V9 polar area) ───────── */
+/* ───────── chart embed (same chart logic) ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -361,53 +407,50 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (LOCKED IN) ───────── */
+/* ───────── DEFAULT LAYOUT (new 16-page mapping) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
+    // Page 1
     p1: {
       name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    p2: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p3: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p4: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p5: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p6: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p7: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-    p8: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    // Header name pages 2–15
+    p2:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p3:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p4:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p5:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p6:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p7:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p8:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p9:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p10: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p11: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p12: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p13: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p14: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
+    p15: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // NEW: header for page 9 (same box)
-    p9: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
-
-    // NOTE: layout keys stay the same; only page attachment shifts in the handler below
-    p3Text: {
-      exec1: { x: 25, y: 380, w: 550, h: 250, size: 16, align: "left", maxLines: 13 },
-      exec2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 22 },
+    // Shared text boxes
+    twoParaPage: {
+      top:    { x: 25, y: 180, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
+      bottom: { x: 25, y: 470, w: 550, h: 280, size: 16, align: "left", maxLines: 15 },
     },
 
-    p4Text: {
-      ov1: { x: 25, y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 30 },
-      ov2: { x: 25, y: 590, w: 550, h: 420, size: 16, align: "left", maxLines: 23 },
-      chart: { x: 250, y: 160, w: 320, h: 320 },
+    oneParaPage: {
+      body:   { x: 25, y: 180, w: 550, h: 520, size: 16, align: "left", maxLines: 28 },
     },
 
-    p5Text: {
-      dd1: { x: 25, y: 140, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
-      dd2: { x: 25, y: 270, w: 550, h: 310, size: 16, align: "left", maxLines: 17 },
-      th1: { x: 25, y: 540, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
-      th2: { x: 25, y: 670, w: 550, h: 160, size: 16, align: "left", maxLines: 9 },
+    // Page 6 chart + text
+    p6Distribution: {
+      p1:    { x: 25,  y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 12 },
+      p2:    { x: 25,  y: 500, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
+      chart: { x: 250, y: 160, w: 320, h: 320 }
     },
 
-    p6WorkWith: {
-      collabC: { x: 30, y: 300, w: 270, h: 420, size: 15, align: "left", maxLines: 14 },
-      collabT: { x: 320, y: 300, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
-      collabR: { x: 30, y: 575, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
-      collabL: { x: 320, y: 575, w: 260, h: 420, size: 15, align: "left", maxLines: 14 },
-    },
-
-    // UPDATED: only 3 actions + new coords (layout unchanged; attachment shifts below)
-    p7Actions: {
+    // Actions page
+    p15Actions: {
       act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act3: { x: 50,  y: 670, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
@@ -454,15 +497,23 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── input normaliser ───────── */
+/* ───────── input normaliser (new payload contract) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
-  const workWith = okObj(d.workWith) ? d.workWith : {};
   const ctrl = okObj(d.ctrl) ? d.ctrl : {};
   const summary = okObj(ctrl.summary) ? ctrl.summary : {};
+  const chart = okObj(d.chart) ? d.chart : {};
 
-  const fullName = S(identity.fullName || d.fullName || d.FullName || summary?.identity?.fullName || "").trim();
+  const fullName = S(
+    identity.fullName ||
+    d.fullName ||
+    d.FullName ||
+    summary?.identity?.user?.fullName ||
+    summary?.identity?.fullName ||
+    ""
+  ).trim();
+
   const dateLabel = S(
     identity.dateLabel ||
     d.dateLbl ||
@@ -474,106 +525,111 @@ function normaliseInput(d = {}) {
   ).trim();
 
   const bandsRaw =
+    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
     (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
-    (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     {};
 
-  const exec1 = S(text.exec_summary_para1 || "");
-  const exec2 = S(text.exec_summary_para2 || "");
-  const execBlock = S(text.exec_summary || "");
-  const [execA, execB] = splitToTwoParas(execBlock);
+  // Full sections
+  const snapshot = S(text.snapshot || "");
+  const chartOverview = S(text.chart_overview || "");
+  const movement = S(text.awareness_movement || "");
+  const themes = S(text.themes || "");
+  const interactions = S(text.interactions_with_others || "");
 
-  const ov1 = S(text.ctrl_overview_para1 || "");
-  const ov2 = S(text.ctrl_overview_para2 || "");
-  const ovBlock = S(text.ctrl_overview || "");
-  const [ovA, ovB] = splitToTwoParas(ovBlock);
-
-  const dd1 = S(text.ctrl_deepdive_para1 || "");
-  const dd2 = S(text.ctrl_deepdive_para2 || "");
-  const ddBlock = S(text.ctrl_deepdive || "");
-  const [ddA, ddB] = splitToTwoParas(ddBlock);
-
-  const th1 = S(text.themes_para1 || "");
-  const th2 = S(text.themes_para2 || "");
-  const thBlock = S(text.themes || "");
-  const [thA, thB] = splitToTwoParas(thBlock);
-
-  // ONLY 3 actions now
-  const act1 = S(text.Act1 || text.act_1 || "");
-  const act2 = S(text.Act2 || text.act_2 || "");
-  const act3 = S(text.Act3 || text.act_3 || "");
-
-  const actsArr = okArr(text.actions) ? text.actions.map((x) => S(x)) : [];
-  const actFromArr = (i) => S(actsArr[i] || "");
+  // Paragraph fallbacks if split fields missing
+  const snapshotParts = splitParasFixed(snapshot, 4);
+  const chartParts = splitParasFixed(chartOverview, 5);
+  const moveParts = splitParasFixed(movement, 5);
+  const themeParts = splitParasFixed(themes, 2);
+  const interactParts = splitParasFixed(interactions, 4);
 
   const chartUrl =
-    S(d.spiderChartUrl || d.spider_chart_url || d.chartUrl || text.chartUrl || "").trim() ||
-    S(d.chart?.spiderUrl || d.chart?.url || "").trim() ||
-    S(summary?.chart?.spiderUrl || "").trim();
+    S(chart.spiderUrl || chart.url || d.spiderChartUrl || d.spider_chart_url || "").trim();
 
   return {
     raw: d,
-    identity: { fullName, dateLabel },
-    bands: bandsRaw,
 
-    exec_summary_para1: exec1 || execA,
-    exec_summary_para2: exec2 || execB,
-
-    ctrl_overview_para1: ov1 || ovA,
-    ctrl_overview_para2: ov2 || ovB,
-
-    ctrl_deepdive_para1: dd1 || ddA,
-    ctrl_deepdive_para2: dd2 || ddB,
-
-    themes_para1: th1 || thA,
-    themes_para2: th2 || thB,
-
-    Act1: act1 || actFromArr(0),
-    Act2: act2 || actFromArr(1),
-    Act3: act3 || actFromArr(2),
-
-    workWith: {
-      concealed: S(workWith.concealed || ""),
-      triggered: S(workWith.triggered || ""),
-      regulated: S(workWith.regulated || ""),
-      lead: S(workWith.lead || ""),
+    identity: {
+      fullName,
+      dateLabel
     },
 
-    chartUrl,
+    bands: bandsRaw,
+
+    snapshot_p1: S(text.snapshot_p1 || snapshotParts[0]),
+    snapshot_p2: S(text.snapshot_p2 || snapshotParts[1]),
+    snapshot_p3: S(text.snapshot_p3 || snapshotParts[2]),
+    snapshot_p4: S(text.snapshot_p4 || snapshotParts[3]),
+
+    chart_p1: S(text.chart_p1 || chartParts[0]),
+    chart_p2: S(text.chart_p2 || chartParts[1]),
+    chart_p3: S(text.chart_p3 || chartParts[2]),
+    chart_p4: S(text.chart_p4 || chartParts[3]),
+    chart_p5: S(text.chart_p5 || chartParts[4]),
+
+    move_p1: S(text.move_p1 || moveParts[0]),
+    move_p2: S(text.move_p2 || moveParts[1]),
+    move_p3: S(text.move_p3 || moveParts[2]),
+    move_p4: S(text.move_p4 || moveParts[3]),
+    move_p5: S(text.move_p5 || moveParts[4]),
+
+    themes_p1: S(text.themes_p1 || themeParts[0]),
+    themes_p2: S(text.themes_p2 || themeParts[1]),
+
+    interact_c: S(text.interact_c || interactParts[0]),
+    interact_t: S(text.interact_t || interactParts[1]),
+    interact_r: S(text.interact_r || interactParts[2]),
+    interact_l: S(text.interact_l || interactParts[3]),
+
+    Act1: S(text.act_1 || text.Act1 || ""),
+    Act2: S(text.act_2 || text.Act2 || ""),
+    Act3: S(text.act_3 || text.Act3 || ""),
+
+    chartUrl
   };
 }
 
 /* ───────── debug probe ───────── */
-function buildProbe(P, domSecond, tpl, ov, L) {
+function buildProbe(P, domSecond, templateInfo, ov, L) {
   return {
     ok: true,
-    where: "fill-template:V12.4:debug",
-    template: tpl,
+    where: "fill-template:V13.0:debug",
+    templateSelection: safeJson(templateInfo),
     domSecond: safeJson(domSecond),
-    identity: { fullName: P.identity.fullName, dateLabel: P.identity.dateLabel },
-    resolvedFrom: {
-      rawDominantKey: P.raw?.dominantKey || "",
-      rawSecondKey: P.raw?.secondKey || "",
-      ctrlDominantKey: P.raw?.ctrl?.dominantKey || "",
-      ctrlSecondKey: P.raw?.ctrl?.secondKey || "",
-      ctrlDominant: P.raw?.ctrl?.dominant || "",
-      ctrlSecondState: P.raw?.ctrl?.secondState || "",
-      summaryDominant: P.raw?.ctrl?.summary?.results?.dominant || "",
-      summarySecond: P.raw?.ctrl?.summary?.results?.secondState || ""
+    identity: {
+      fullName: P.identity.fullName,
+      dateLabel: P.identity.dateLabel
     },
     textLengths: {
-      exec1: S(P.exec_summary_para1).length,
-      exec2: S(P.exec_summary_para2).length,
-      ov1: S(P.ctrl_overview_para1).length,
-      ov2: S(P.ctrl_overview_para2).length,
-      dd1: S(P.ctrl_deepdive_para1).length,
-      dd2: S(P.ctrl_deepdive_para2).length,
-      th1: S(P.themes_para1).length,
-      th2: S(P.themes_para2).length,
+      snapshot_p1: S(P.snapshot_p1).length,
+      snapshot_p2: S(P.snapshot_p2).length,
+      snapshot_p3: S(P.snapshot_p3).length,
+      snapshot_p4: S(P.snapshot_p4).length,
+
+      chart_p1: S(P.chart_p1).length,
+      chart_p2: S(P.chart_p2).length,
+      chart_p3: S(P.chart_p3).length,
+      chart_p4: S(P.chart_p4).length,
+      chart_p5: S(P.chart_p5).length,
+
+      move_p1: S(P.move_p1).length,
+      move_p2: S(P.move_p2).length,
+      move_p3: S(P.move_p3).length,
+      move_p4: S(P.move_p4).length,
+      move_p5: S(P.move_p5).length,
+
+      themes_p1: S(P.themes_p1).length,
+      themes_p2: S(P.themes_p2).length,
+
+      interact_c: S(P.interact_c).length,
+      interact_t: S(P.interact_t).length,
+      interact_r: S(P.interact_r).length,
+      interact_l: S(P.interact_l).length,
+
       act1: S(P.Act1).length,
       act2: S(P.Act2).length,
-      act3: S(P.Act3).length,
+      act3: S(P.Act3).length
     },
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
@@ -581,9 +637,9 @@ function buildProbe(P, domSecond, tpl, ov, L) {
       applied: ov?.applied || [],
       ignored: ov?.ignored || [],
       resolvedExamples: {
-        p7Actions_act1: safeJson(L?.p7Actions?.act1 || {}),
-        p7Actions_act2: safeJson(L?.p7Actions?.act2 || {}),
-        p7Actions_act3: safeJson(L?.p7Actions?.act3 || {}),
+        p15Actions_act1: safeJson(L?.p15Actions?.act1 || {}),
+        p15Actions_act2: safeJson(L?.p15Actions?.act2 || {}),
+        p15Actions_act3: safeJson(L?.p15Actions?.act3 || {}),
       },
     },
   };
@@ -597,91 +653,162 @@ export default async function handler(req, res) {
 
     const payload = await readPayload(req);
     const P = normaliseInput(payload);
-    const domSecond = computeDomAndSecondKeys({
-      raw: payload,
-      domKey: payload?.dominantKey,
-      secondKey: payload?.secondKey
-    });
+    const domSecond = computeDomAndSecondKeys({ raw: payload });
 
-    const validCombos = new Set(["CT","CL","CR","TC","TR","TL","RC","RT","RL","LC","LR","LT"]);
-    const safeCombo = validCombos.has(domSecond.templateKey) ? domSecond.templateKey : "CT";
-    const tpl = { combo: domSecond.templateKey, safeCombo, tpl: `CTRL_PoC_Assessment_Profile_template_${safeCombo}.pdf` };
+    const validCombos = new Set([
+      "CT","CL","CR",
+      "TC","TR","TL",
+      "RC","RT","RL",
+      "LC","LR","LT"
+    ]);
+
+    const comboIsValid = validCombos.has(domSecond.templateKey);
+    const selectedTemplate = comboIsValid
+      ? `CTRL_PoC_Assessment_Profile_template_${domSecond.templateKey}.pdf`
+      : "CTRL_PoC_Assessment_Profile_fallback.pdf";
+
+    const fallbackTemplate = "CTRL_PoC_Assessment_Profile_fallback.pdf";
+
+    const templateInfo = {
+      domKey: domSecond.domKey,
+      secondKey: domSecond.secondKey,
+      templateKey: domSecond.templateKey,
+      comboIsValid,
+      selectedTemplate,
+      fallbackTemplate,
+      usedTemplate: "",
+      usedFallback: false,
+      selectedTemplatePath: "",
+      fallbackTemplatePath: ""
+    };
 
     const L = safeJson(DEFAULT_LAYOUT.pages);
     const ov = applyLayoutOverridesFromUrl(L, url);
 
-    if (debug) return res.status(200).json(buildProbe(P, domSecond, tpl, ov, L));
+    if (debug) {
+      return res.status(200).json(buildProbe(P, domSecond, templateInfo, ov, L));
+    }
 
-    const pdfBytes = await loadTemplateBytesLocal(tpl.tpl);
-    const pdfDoc = await PDFDocument.load(pdfBytes);
+    // Try selected template, then true fallback template
+    let templateBytes;
+    try {
+      const selected = await loadTemplateBytesLocal(selectedTemplate);
+      templateBytes = selected.bytes;
+      templateInfo.usedTemplate = selectedTemplate;
+      templateInfo.selectedTemplatePath = selected.path;
+    } catch (errSelected) {
+      const fallback = await loadTemplateBytesLocal(fallbackTemplate);
+      templateBytes = fallback.bytes;
+      templateInfo.usedTemplate = fallbackTemplate;
+      templateInfo.usedFallback = true;
+      templateInfo.fallbackTemplatePath = fallback.path;
+    }
+
+    const pdfDoc = await PDFDocument.load(templateBytes);
 
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     const pages = pdfDoc.getPages();
 
-    // Page 1
+    // Page 1 cover
     if (pages[0]) {
       drawTextBox(pages[0], fontB, P.identity.fullName, L.p1.name, { maxLines: 1 });
-      drawTextBox(pages[0], font,  P.identity.dateLabel, L.p1.date, { maxLines: 1 });
+      drawTextBox(pages[0], font, P.identity.dateLabel, L.p1.date, { maxLines: 1 });
     }
 
-    // Header name pages 2–9 (was 2–8)
+    // Header name pages 2–15
     const headerName = norm(P.identity.fullName);
     if (headerName) {
-      for (let i = 1; i < Math.min(pages.length, 9); i++) {
+      for (let i = 1; i < Math.min(pages.length, 15); i++) {
         const pk = `p${i + 1}`;
         const box = L?.[pk]?.hdrName;
         if (box) drawTextBox(pages[i], font, headerName, box, { maxLines: 1 });
       }
     }
 
-    // New page layout shift:
-    // p3 = header only (no text)
-    const p4 = pages[3] || null; // exec_summary (was p3)
-    const p5 = pages[4] || null; // overview + chart (was p4)
-    const p6 = pages[5] || null; // deepdive + themes (was p5)
-    const p7 = pages[6] || null; // workWith (was p6)
-    const p8 = pages[7] || null; // actions (was p7)
+    // New 16-page mapping
+    const p4  = pages[3]  || null;  // Snapshot
+    const p5  = pages[4]  || null;  // Snapshot
+    const p6  = pages[5]  || null;  // Distribution
+    const p7  = pages[6]  || null;  // Distribution
+    const p8  = pages[7]  || null;  // Distribution
+    const p9  = pages[8]  || null;  // Movement
+    const p10 = pages[9]  || null;  // Movement
+    const p11 = pages[10] || null;  // Movement
+    const p12 = pages[11] || null;  // Themes
+    const p13 = pages[12] || null;  // Interactions
+    const p14 = pages[13] || null;  // Interactions
+    const p15 = pages[14] || null;  // Actions
 
-    // Exec summary now on page 4 (was page 3)
+    // Pages 4–5 Snapshot
     if (p4) {
-      drawTextBox(p4, font, P.exec_summary_para1, L.p3Text.exec1);
-      drawTextBox(p4, font, P.exec_summary_para2, L.p3Text.exec2);
+      drawTextBox(p4, font, P.snapshot_p1, L.twoParaPage.top);
+      drawTextBox(p4, font, P.snapshot_p2, L.twoParaPage.bottom);
     }
 
-    // Overview + chart now on page 5 (was page 4)
     if (p5) {
-      drawTextBox(p5, font, P.ctrl_overview_para1, L.p4Text.ov1);
-      drawTextBox(p5, font, P.ctrl_overview_para2, L.p4Text.ov2);
+      drawTextBox(p5, font, P.snapshot_p3, L.twoParaPage.top);
+      drawTextBox(p5, font, P.snapshot_p4, L.twoParaPage.bottom);
+    }
+
+    // Pages 6–8 Distribution
+    if (p6) {
+      drawTextBox(p6, font, P.chart_p1, L.p6Distribution.p1);
+      drawTextBox(p6, font, P.chart_p2, L.p6Distribution.p2);
       try {
-        await embedRadarFromBandsOrUrl(pdfDoc, p5, L.p4Text.chart, P.bands || {}, P.chartUrl);
+        await embedRadarFromBandsOrUrl(pdfDoc, p6, L.p6Distribution.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V12.4] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V13.0] Chart skipped:", e?.message || String(e));
       }
     }
 
-    // Deepdive + themes now on page 6 (was page 5)
-    if (p6) {
-      drawTextBox(p6, font, P.ctrl_deepdive_para1, L.p5Text.dd1);
-      drawTextBox(p6, font, P.ctrl_deepdive_para2, L.p5Text.dd2);
-      drawTextBox(p6, font, P.themes_para1, L.p5Text.th1);
-      drawTextBox(p6, font, P.themes_para2, L.p5Text.th2);
-    }
-
-    // WorkWith now on page 7 (was page 6)
     if (p7) {
-      drawTextBox(p7, font, P.workWith?.concealed, L.p6WorkWith.collabC);
-      drawTextBox(p7, font, P.workWith?.triggered, L.p6WorkWith.collabT);
-      drawTextBox(p7, font, P.workWith?.regulated, L.p6WorkWith.collabR);
-      drawTextBox(p7, font, P.workWith?.lead,      L.p6WorkWith.collabL);
+      drawTextBox(p7, font, P.chart_p3, L.twoParaPage.top);
+      drawTextBox(p7, font, P.chart_p4, L.twoParaPage.bottom);
     }
 
-    // Only 3 actions now — now on page 8 (was page 7)
     if (p8) {
-      drawTextBox(p8, font, P.Act1, L.p7Actions.act1);
-      drawTextBox(p8, font, P.Act2, L.p7Actions.act2);
-      drawTextBox(p8, font, P.Act3, L.p7Actions.act3);
+      drawTextBox(p8, font, P.chart_p5, L.oneParaPage.body);
+    }
+
+    // Pages 9–11 Movement
+    if (p9) {
+      drawTextBox(p9, font, P.move_p1, L.twoParaPage.top);
+      drawTextBox(p9, font, P.move_p2, L.twoParaPage.bottom);
+    }
+
+    if (p10) {
+      drawTextBox(p10, font, P.move_p3, L.twoParaPage.top);
+      drawTextBox(p10, font, P.move_p4, L.twoParaPage.bottom);
+    }
+
+    if (p11) {
+      drawTextBox(p11, font, P.move_p5, L.oneParaPage.body);
+    }
+
+    // Page 12 Themes
+    if (p12) {
+      drawTextBox(p12, font, P.themes_p1, L.twoParaPage.top);
+      drawTextBox(p12, font, P.themes_p2, L.twoParaPage.bottom);
+    }
+
+    // Pages 13–14 Interactions with Others
+    if (p13) {
+      drawTextBox(p13, font, P.interact_c, L.twoParaPage.top);
+      drawTextBox(p13, font, P.interact_t, L.twoParaPage.bottom);
+    }
+
+    if (p14) {
+      drawTextBox(p14, font, P.interact_r, L.twoParaPage.top);
+      drawTextBox(p14, font, P.interact_l, L.twoParaPage.bottom);
+    }
+
+    // Page 15 Actions
+    if (p15) {
+      drawTextBox(p15, font, P.Act1, L.p15Actions.act1);
+      drawTextBox(p15, font, P.Act2, L.p15Actions.act2);
+      drawTextBox(p15, font, P.Act3, L.p15Actions.act3);
     }
 
     const outBytes = await pdfDoc.save();
@@ -692,7 +819,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V12.4] CRASH", err);
+    console.error("[fill-template:V13.0] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
