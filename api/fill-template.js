@@ -1,21 +1,32 @@
 /**
- * CTRL PoC Export Service · fill-template (V13.1 · new user profile contract)
+ * CTRL PoC Export Service · fill-template (V14.0 · aligned to V15 build payload)
  *
  * Changes in this update:
- * - Uses the NEW user payload contract:
+ * - Fully aligned to the V15 Build PDF payload contract
+ * - Treats direct paragraph fields as primary:
+ *   - text.snapshot_p1..p4
+ *   - text.chart_p1..p5
+ *   - text.move_p1..p5
+ *   - text.themes_p1..p2
+ *   - text.interact_c / interact_t / interact_r / interact_l
+ *   - text.act_1 / act_2 / act_3
+ * - Uses rebuilt compatibility fields when present:
  *   - text.snapshot
  *   - text.chart_overview
  *   - text.awareness_movement
  *   - text.themes
  *   - text.interactions_with_others
- *   - text.actions / act_1..act_3
- * - Uses sanitiser paragraph-contract outputs:
- *   - snapshot_p1..p4
- *   - chart_p1..p5
- *   - move_p1..p5
- *   - themes_p1..p2
- *   - interact_c / interact_t / interact_r / interact_l
- * - Supports NEW 16-page user template structure:
+ *   - text.actions
+ *   - text.actions_bullets
+ * - Validates parent-vs-slot consistency in debug probe
+ * - Validates actions array / act slots / bullets consistency in debug probe
+ * - Supports V15 identity and ctrl structure:
+ *   - identity.fullName / preferredName / email / dateLabel
+ *   - ctrl.dominantKey / secondKey / dominantSubState / templateKey / bands
+ * - POST remains the primary transport
+ * - Accepts both raw JSON payloads and wrapped bodies like { data: payload }
+ * - GET ?data=... fallback retained only for backwards compatibility
+ * - Keeps the 16-page user template structure:
  *   1  Cover
  *   2  Table of Contents
  *   3  How to Read This Profile
@@ -31,9 +42,6 @@
  * - True PDF fallback support:
  *   CTRL_PoC_Assessment_Profile_fallback.pdf
  * - Retains debug mode (?debug=1)
- * - POST is now the primary transport
- * - Accepts both raw JSON payloads and wrapped bodies like { data: payload }
- * - GET ?data=... fallback retained only for backwards compatibility
  */
 
 export const config = { runtime: "nodejs" };
@@ -53,6 +61,65 @@ const okArr = (a) => Array.isArray(a);
 function safeJson(obj) {
   try { return JSON.parse(JSON.stringify(obj)); }
   catch { return { _error: "Could not serialise debug object" }; }
+}
+
+function clean(v) {
+  return S(v).trim();
+}
+
+function strEq(a, b) {
+  return clean(a).replace(/\r/g, "") === clean(b).replace(/\r/g, "");
+}
+
+function joinParas(arr) {
+  return (arr || [])
+    .map((x) => clean(x))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function paraCount(s) {
+  const t = clean(s);
+  if (!t) return 0;
+  return t
+    .split(/\n\s*\n/)
+    .map((x) => clean(x))
+    .filter(Boolean)
+    .length;
+}
+
+function bulletLineCount(s) {
+  return clean(s)
+    ? String(s)
+        .split("\n")
+        .map((x) => x.trim())
+        .filter((x) => x.startsWith("• ")).length
+    : 0;
+}
+
+function uniqueTrim(arr) {
+  const out = [];
+  const seen = new Set();
+
+  for (const x of (arr || [])) {
+    const v = clean(x);
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+function toBullets(arr) {
+  if (!okArr(arr)) return "";
+  return arr
+    .map((x) => clean(x))
+    .filter(Boolean)
+    .map((x) => `• ${x}`)
+    .join("\n");
 }
 
 /* ───────── filename helpers ───────── */
@@ -315,7 +382,7 @@ function computeDomAndSecondKeys(P) {
   return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
 }
 
-/* ───────── chart embed (same chart logic) ───────── */
+/* ───────── chart embed ───────── */
 function makeSpiderChartUrl12(bandsRaw) {
   const keys = [
     "C_low","C_mid","C_high",
@@ -426,16 +493,14 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (new 16-page mapping) ───────── */
+/* ───────── DEFAULT LAYOUT (16-page mapping) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
-    // Page 1
     p1: {
       name: { x: 60, y: 458, w: 500, h: 60, size: 30, align: "center", maxLines: 1 },
       date: { x: 230, y: 613, w: 500, h: 40, size: 25, align: "left", maxLines: 1 },
     },
 
-    // Header name pages 2–15
     p2:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p3:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p4:  { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
@@ -451,7 +516,6 @@ const DEFAULT_LAYOUT = {
     p14: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
     p15: { hdrName: { x: 380, y: 51, w: 400, h: 24, size: 13, align: "left", maxLines: 1 } },
 
-    // Shared text boxes
     twoParaPage: {
       top:    { x: 25, y: 180, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
       bottom: { x: 25, y: 470, w: 550, h: 280, size: 16, align: "left", maxLines: 15 },
@@ -461,14 +525,12 @@ const DEFAULT_LAYOUT = {
       body:   { x: 25, y: 180, w: 550, h: 520, size: 16, align: "left", maxLines: 28 },
     },
 
-    // Page 6 chart + text
     p6Distribution: {
       p1:    { x: 25,  y: 160, w: 200, h: 240, size: 16, align: "left", maxLines: 12 },
       p2:    { x: 25,  y: 500, w: 550, h: 240, size: 16, align: "left", maxLines: 13 },
       chart: { x: 250, y: 160, w: 320, h: 320 }
     },
 
-    // Actions page
     p15Actions: {
       act1: { x: 50,  y: 380, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
       act2: { x: 100, y: 530, w: 440, h: 95, size: 17, align: "left", maxLines: 5 },
@@ -516,7 +578,64 @@ function applyLayoutOverridesFromUrl(layoutPages, url) {
   return { applied, ignored, layoutPages };
 }
 
-/* ───────── input normaliser (new payload contract) ───────── */
+/* ───────── actions normaliser ───────── */
+function ensureActions(text) {
+  let arr = [];
+
+  if (okArr(text?.actions)) {
+    arr = text.actions.map((x) => clean(x)).filter(Boolean);
+  }
+
+  const a1 = clean(text?.act_1 || text?.Act1);
+  const a2 = clean(text?.act_2 || text?.Act2);
+  const a3 = clean(text?.act_3 || text?.Act3);
+
+  if (a1 || a2 || a3) {
+    arr = [a1, a2, a3].filter(Boolean);
+  }
+
+  const bulletsRaw = clean(text?.actions_bullets);
+  const bulletsArr = bulletsRaw
+    ? bulletsRaw
+        .split("\n")
+        .map((x) => clean(x.replace(/^•\s*/, "")))
+        .filter(Boolean)
+    : [];
+
+  if (!arr.length && bulletsArr.length) {
+    arr = bulletsArr;
+  }
+
+  arr = uniqueTrim(arr);
+
+  const fallbackActions = [
+    "Notice what happens in the first few seconds after feedback lands.",
+    "Try naming the feeling internally before you respond.",
+    "Choose one moment this week to pause before replying."
+  ];
+
+  for (let i = 0; arr.length < 3 && i < fallbackActions.length; i++) {
+    const cand = clean(fallbackActions[i]);
+    if (!cand) continue;
+    if (!arr.some((a) => a.toLowerCase() === cand.toLowerCase())) arr.push(cand);
+  }
+
+  while (arr.length < 3) {
+    arr.push("Pick one small moment to pause and notice your first reaction.");
+  }
+
+  arr = uniqueTrim(arr).slice(0, 3);
+
+  return {
+    arr,
+    act_1: clean(a1 || arr[0] || ""),
+    act_2: clean(a2 || arr[1] || ""),
+    act_3: clean(a3 || arr[2] || ""),
+    bullets: bulletsRaw || toBullets(arr)
+  };
+}
+
+/* ───────── input normaliser (aligned to V15 payload contract) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
@@ -530,6 +649,23 @@ function normaliseInput(d = {}) {
     d.FullName ||
     summary?.identity?.user?.fullName ||
     summary?.identity?.fullName ||
+    ""
+  ).trim();
+
+  const preferredName = S(
+    identity.preferredName ||
+    d.preferredName ||
+    d.PreferredName ||
+    summary?.identity?.user?.preferredName ||
+    ""
+  ).trim();
+
+  const email = S(
+    identity.email ||
+    d.email ||
+    d.Email ||
+    summary?.identity?.user?.email ||
+    summary?.identity?.email ||
     ""
   ).trim();
 
@@ -549,33 +685,47 @@ function normaliseInput(d = {}) {
     (okObj(d.bands) && Object.keys(d.bands).length ? d.bands : null) ||
     {};
 
-  // Full sections
   const snapshot = S(text.snapshot || "");
   const chartOverview = S(text.chart_overview || "");
   const movement = S(text.awareness_movement || "");
   const themes = S(text.themes || "");
   const interactions = S(text.interactions_with_others || "");
 
-  // Paragraph fallbacks if split fields missing
   const snapshotParts = splitParasFixed(snapshot, 4);
   const chartParts = splitParasFixed(chartOverview, 5);
   const moveParts = splitParasFixed(movement, 5);
   const themeParts = splitParasFixed(themes, 2);
   const interactParts = splitParasFixed(interactions, 4);
 
-  const chartUrl =
-    S(chart.spiderUrl || chart.url || d.spiderChartUrl || d.spider_chart_url || "").trim();
+  const ensuredActions = ensureActions(text);
 
-  return {
+  const out = {
     raw: d,
 
     identity: {
       fullName,
+      preferredName,
+      email,
       dateLabel
+    },
+
+    ctrl: {
+      dominantKey: clean(ctrl.dominantKey || d.domKey || d.dominantKey || ""),
+      secondKey: clean(ctrl.secondKey || d.secondKey || ""),
+      dominantSubState: clean(ctrl.dominantSubState || d.domSub || ""),
+      templateKey: clean(ctrl.templateKey || d.templateKey || "")
     },
 
     bands: bandsRaw,
 
+    // parent strings
+    snapshot,
+    chart_overview: chartOverview,
+    awareness_movement: movement,
+    themes,
+    interactions_with_others: interactions,
+
+    // direct slots
     snapshot_p1: S(text.snapshot_p1 || snapshotParts[0]),
     snapshot_p2: S(text.snapshot_p2 || snapshotParts[1]),
     snapshot_p3: S(text.snapshot_p3 || snapshotParts[2]),
@@ -601,25 +751,66 @@ function normaliseInput(d = {}) {
     interact_r: S(text.interact_r || interactParts[2]),
     interact_l: S(text.interact_l || interactParts[3]),
 
-    Act1: S(text.act_1 || text.Act1 || ""),
-    Act2: S(text.act_2 || text.Act2 || ""),
-    Act3: S(text.act_3 || text.Act3 || ""),
+    actions: ensuredActions.arr,
+    actions_bullets: ensuredActions.bullets,
 
-    chartUrl
+    act_1: ensuredActions.act_1,
+    act_2: ensuredActions.act_2,
+    act_3: ensuredActions.act_3,
+
+    Act1: ensuredActions.act_1,
+    Act2: ensuredActions.act_2,
+    Act3: ensuredActions.act_3,
+
+    chartUrl: S(chart.spiderUrl || chart.url || d.spiderChartUrl || d.spider_chart_url || "").trim()
   };
+
+  return out;
 }
 
 /* ───────── debug probe ───────── */
 function buildProbe(P, domSecond, templateInfo, ov, L) {
+  const expectedSnapshot = joinParas([P.snapshot_p1, P.snapshot_p2, P.snapshot_p3, P.snapshot_p4]);
+  const expectedChart = joinParas([P.chart_p1, P.chart_p2, P.chart_p3, P.chart_p4, P.chart_p5]);
+  const expectedMovement = joinParas([P.move_p1, P.move_p2, P.move_p3, P.move_p4, P.move_p5]);
+  const expectedThemes = joinParas([P.themes_p1, P.themes_p2]);
+  const expectedInteractions = joinParas([P.interact_c, P.interact_t, P.interact_r, P.interact_l]);
+  const expectedBullets = [P.act_1, P.act_2, P.act_3]
+    .map((x) => clean(x))
+    .filter(Boolean)
+    .map((x) => `• ${x}`)
+    .join("\n");
+
   return {
     ok: true,
-    where: "fill-template:V13.1:debug",
+    where: "fill-template:V14.0:debug",
     templateSelection: safeJson(templateInfo),
     domSecond: safeJson(domSecond),
+
     identity: {
       fullName: P.identity.fullName,
+      preferredName: P.identity.preferredName,
+      email: P.identity.email,
       dateLabel: P.identity.dateLabel
     },
+
+    parentLengths: {
+      snapshot: S(P.snapshot).length,
+      chart_overview: S(P.chart_overview).length,
+      awareness_movement: S(P.awareness_movement).length,
+      themes: S(P.themes).length,
+      interactions_with_others: S(P.interactions_with_others).length,
+      actions_bullets: S(P.actions_bullets).length
+    },
+
+    parentParagraphCounts: {
+      snapshot: paraCount(P.snapshot),
+      chart_overview: paraCount(P.chart_overview),
+      awareness_movement: paraCount(P.awareness_movement),
+      themes: paraCount(P.themes),
+      interactions_with_others: paraCount(P.interactions_with_others)
+    },
+
     textLengths: {
       snapshot_p1: S(P.snapshot_p1).length,
       snapshot_p2: S(P.snapshot_p2).length,
@@ -646,10 +837,28 @@ function buildProbe(P, domSecond, templateInfo, ov, L) {
       interact_r: S(P.interact_r).length,
       interact_l: S(P.interact_l).length,
 
-      act1: S(P.Act1).length,
-      act2: S(P.Act2).length,
-      act3: S(P.Act3).length
+      act_1: S(P.act_1).length,
+      act_2: S(P.act_2).length,
+      act_3: S(P.act_3).length
     },
+
+    parentMatchesSlots: {
+      snapshot: !clean(P.snapshot) ? null : strEq(P.snapshot, expectedSnapshot),
+      chart_overview: !clean(P.chart_overview) ? null : strEq(P.chart_overview, expectedChart),
+      awareness_movement: !clean(P.awareness_movement) ? null : strEq(P.awareness_movement, expectedMovement),
+      themes: !clean(P.themes) ? null : strEq(P.themes, expectedThemes),
+      interactions_with_others: !clean(P.interactions_with_others) ? null : strEq(P.interactions_with_others, expectedInteractions)
+    },
+
+    actions: {
+      arrayLength: okArr(P.actions) ? P.actions.length : 0,
+      bulletLines: bulletLineCount(P.actions_bullets),
+      act1_matches_actions0: P.actions?.[0] ? strEq(P.act_1, P.actions[0]) : null,
+      act2_matches_actions1: P.actions?.[1] ? strEq(P.act_2, P.actions[1]) : null,
+      act3_matches_actions2: P.actions?.[2] ? strEq(P.act_3, P.actions[2]) : null,
+      bullets_match_acts: !clean(P.actions_bullets) ? null : strEq(P.actions_bullets, expectedBullets)
+    },
+
     layoutOverrides: {
       appliedCount: ov?.applied?.length || 0,
       ignoredCount: ov?.ignored?.length || 0,
@@ -728,7 +937,6 @@ export default async function handler(req, res) {
       return res.status(200).json(buildProbe(P, domSecond, templateInfo, ov, L));
     }
 
-    // Try selected template, then true fallback template
     let templateBytes;
     try {
       const selected = await loadTemplateBytesLocal(selectedTemplate);
@@ -744,10 +952,8 @@ export default async function handler(req, res) {
     }
 
     const pdfDoc = await PDFDocument.load(templateBytes);
-
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontB = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
     const pages = pdfDoc.getPages();
 
     // Page 1 cover
@@ -766,21 +972,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // New 16-page mapping
-    const p4  = pages[3]  || null;  // Snapshot
-    const p5  = pages[4]  || null;  // Snapshot
-    const p6  = pages[5]  || null;  // Distribution
-    const p7  = pages[6]  || null;  // Distribution
-    const p8  = pages[7]  || null;  // Distribution
-    const p9  = pages[8]  || null;  // Movement
-    const p10 = pages[9]  || null;  // Movement
-    const p11 = pages[10] || null;  // Movement
-    const p12 = pages[11] || null;  // Themes
-    const p13 = pages[12] || null;  // Interactions
-    const p14 = pages[13] || null;  // Interactions
-    const p15 = pages[14] || null;  // Actions
+    // Page mapping
+    const p4  = pages[3]  || null;
+    const p5  = pages[4]  || null;
+    const p6  = pages[5]  || null;
+    const p7  = pages[6]  || null;
+    const p8  = pages[7]  || null;
+    const p9  = pages[8]  || null;
+    const p10 = pages[9]  || null;
+    const p11 = pages[10] || null;
+    const p12 = pages[11] || null;
+    const p13 = pages[12] || null;
+    const p14 = pages[13] || null;
+    const p15 = pages[14] || null;
 
-    // Pages 4–5 Snapshot
+    // Snapshot
     if (p4) {
       drawTextBox(p4, font, P.snapshot_p1, L.twoParaPage.top);
       drawTextBox(p4, font, P.snapshot_p2, L.twoParaPage.bottom);
@@ -791,14 +997,14 @@ export default async function handler(req, res) {
       drawTextBox(p5, font, P.snapshot_p4, L.twoParaPage.bottom);
     }
 
-    // Pages 6–8 Distribution
+    // Distribution
     if (p6) {
       drawTextBox(p6, font, P.chart_p1, L.p6Distribution.p1);
       drawTextBox(p6, font, P.chart_p2, L.p6Distribution.p2);
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p6, L.p6Distribution.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V13.1] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V14.0] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -811,7 +1017,7 @@ export default async function handler(req, res) {
       drawTextBox(p8, font, P.chart_p5, L.oneParaPage.body);
     }
 
-    // Pages 9–11 Movement
+    // Movement
     if (p9) {
       drawTextBox(p9, font, P.move_p1, L.twoParaPage.top);
       drawTextBox(p9, font, P.move_p2, L.twoParaPage.bottom);
@@ -826,13 +1032,13 @@ export default async function handler(req, res) {
       drawTextBox(p11, font, P.move_p5, L.oneParaPage.body);
     }
 
-    // Page 12 Themes
+    // Themes
     if (p12) {
       drawTextBox(p12, font, P.themes_p1, L.twoParaPage.top);
       drawTextBox(p12, font, P.themes_p2, L.twoParaPage.bottom);
     }
 
-    // Pages 13–14 Interactions with Others
+    // Interactions
     if (p13) {
       drawTextBox(p13, font, P.interact_c, L.twoParaPage.top);
       drawTextBox(p13, font, P.interact_t, L.twoParaPage.bottom);
@@ -843,11 +1049,11 @@ export default async function handler(req, res) {
       drawTextBox(p14, font, P.interact_l, L.twoParaPage.bottom);
     }
 
-    // Page 15 Actions
+    // Actions
     if (p15) {
-      drawTextBox(p15, font, P.Act1, L.p15Actions.act1);
-      drawTextBox(p15, font, P.Act2, L.p15Actions.act2);
-      drawTextBox(p15, font, P.Act3, L.p15Actions.act3);
+      drawTextBox(p15, font, P.act_1, L.p15Actions.act1);
+      drawTextBox(p15, font, P.act_2, L.p15Actions.act2);
+      drawTextBox(p15, font, P.act_3, L.p15Actions.act3);
     }
 
     const outBytes = await pdfDoc.save();
@@ -858,7 +1064,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V13.1] CRASH", err);
+    console.error("[fill-template:V14.0] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
