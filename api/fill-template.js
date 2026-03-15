@@ -1,8 +1,8 @@
 /**
- * CTRL PoC Export Service · fill-template (V14.0 · aligned to V15 build payload)
+ * CTRL PoC Export Service · fill-template (V15.0 · aligned to V16 build payload)
  *
  * Changes in this update:
- * - Fully aligned to the V15 Build PDF payload contract
+ * - Fully aligned to the V16 Build PDF payload contract
  * - Treats direct paragraph fields as primary:
  *   - text.snapshot_p1..p4
  *   - text.chart_p1..p5
@@ -18,11 +18,18 @@
  *   - text.interactions_with_others
  *   - text.actions
  *   - text.actions_bullets
+ * - Supports V16 identity / date structure:
+ *   - identity.fullName / preferredName / email / dateLabel
+ *   - root dateLbl
+ *   - root dateLabel
+ * - Supports V16 ctrl structure:
+ *   - ctrl.dominantKey / secondKey / dominantSubState / templateKey / bands / summary
+ * - Supports V16 chart structure:
+ *   - chart.spiderUrl
+ *   - root spiderChartUrl
  * - Validates parent-vs-slot consistency in debug probe
  * - Validates actions array / act slots / bullets consistency in debug probe
- * - Supports V15 identity and ctrl structure:
- *   - identity.fullName / preferredName / email / dateLabel
- *   - ctrl.dominantKey / secondKey / dominantSubState / templateKey / bands
+ * - Adds raw-payload-style readiness checks in debug probe
  * - POST remains the primary transport
  * - Accepts both raw JSON payloads and wrapped bodies like { data: payload }
  * - GET ?data=... fallback retained only for backwards compatibility
@@ -65,6 +72,14 @@ function safeJson(obj) {
 
 function clean(v) {
   return S(v).trim();
+}
+
+function normEmail(v) {
+  return clean(v).toLowerCase();
+}
+
+function looksEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail(v));
 }
 
 function strEq(a, b) {
@@ -120,6 +135,15 @@ function toBullets(arr) {
     .filter(Boolean)
     .map((x) => `• ${x}`)
     .join("\n");
+}
+
+function codeToLabel(c) {
+  return ({
+    C: "Concealed",
+    T: "Triggered",
+    R: "Regulated",
+    L: "Lead"
+  }[String(c || "").toUpperCase()] || "");
 }
 
 /* ───────── filename helpers ───────── */
@@ -379,7 +403,11 @@ function computeDomAndSecondKeys(P) {
     resolveStateKey(raw.secondState) ||
     "T";
 
-  return { domKey, secondKey, templateKey: `${domKey}${secondKey}` };
+  const templateKey =
+    clean(ctrl.templateKey) ||
+    `${domKey}${secondKey}`;
+
+  return { domKey, secondKey, templateKey };
 }
 
 /* ───────── chart embed ───────── */
@@ -404,9 +432,9 @@ function makeSpiderChartUrl12(bandsRaw) {
 
   const CTRL_COLOURS = {
     C: { low: "rgba(230, 228, 225, 0.55)", mid: "rgba(184, 180, 174, 0.55)", high: "rgba(110, 106, 100, 0.55)" },
-    T: { low: "rgba(244, 225, 198, 0.55)", mid: "rgba(211, 155,  74, 0.55)", high: "rgba(154,  94,  26, 0.55)" },
-    R: { low: "rgba(226, 236, 230, 0.55)", mid: "rgba(143, 183, 161, 0.55)", high: "rgba( 79, 127, 105, 0.55)" },
-    L: { low: "rgba(230, 220, 227, 0.55)", mid: "rgba(164, 135, 159, 0.55)", high: "rgba( 94,  63,  90, 0.55)" },
+    T: { low: "rgba(244, 225, 198, 0.55)", mid: "rgba(211, 155, 74, 0.55)", high: "rgba(154, 94, 26, 0.55)" },
+    R: { low: "rgba(226, 236, 230, 0.55)", mid: "rgba(143, 183, 161, 0.55)", high: "rgba(79, 127, 105, 0.55)" },
+    L: { low: "rgba(230, 220, 227, 0.55)", mid: "rgba(164, 135, 159, 0.55)", high: "rgba(94, 63, 90, 0.55)" },
   };
 
   const colours = keys.map((k) => {
@@ -635,7 +663,7 @@ function ensureActions(text) {
   };
 }
 
-/* ───────── input normaliser (aligned to V15 payload contract) ───────── */
+/* ───────── input normaliser (aligned to V16 payload contract) ───────── */
 function normaliseInput(d = {}) {
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
@@ -657,6 +685,7 @@ function normaliseInput(d = {}) {
     d.preferredName ||
     d.PreferredName ||
     summary?.identity?.user?.preferredName ||
+    summary?.identity?.preferredName ||
     ""
   ).trim();
 
@@ -676,6 +705,7 @@ function normaliseInput(d = {}) {
     d.date ||
     d.Date ||
     summary?.dateLbl ||
+    summary?.dateLabel ||
     ""
   ).trim();
 
@@ -718,14 +748,12 @@ function normaliseInput(d = {}) {
 
     bands: bandsRaw,
 
-    // parent strings
     snapshot,
     chart_overview: chartOverview,
     awareness_movement: movement,
     themes,
     interactions_with_others: interactions,
 
-    // direct slots
     snapshot_p1: S(text.snapshot_p1 || snapshotParts[0]),
     snapshot_p2: S(text.snapshot_p2 || snapshotParts[1]),
     snapshot_p3: S(text.snapshot_p3 || snapshotParts[2]),
@@ -781,9 +809,17 @@ function buildProbe(P, domSecond, templateInfo, ov, L) {
     .map((x) => `• ${x}`)
     .join("\n");
 
+  const rawPayloadReady =
+    !!clean(P.identity.fullName) &&
+    !!clean(P.identity.email) &&
+    looksEmail(P.identity.email) &&
+    !!clean(P.identity.dateLabel) &&
+    !!clean(domSecond.domKey) &&
+    !!clean(domSecond.secondKey);
+
   return {
     ok: true,
-    where: "fill-template:V14.0:debug",
+    where: "fill-template:V15.0:debug",
     templateSelection: safeJson(templateInfo),
     domSecond: safeJson(domSecond),
 
@@ -791,8 +827,11 @@ function buildProbe(P, domSecond, templateInfo, ov, L) {
       fullName: P.identity.fullName,
       preferredName: P.identity.preferredName,
       email: P.identity.email,
+      emailValid: looksEmail(P.identity.email),
       dateLabel: P.identity.dateLabel
     },
+
+    rawPayloadReady,
 
     parentLengths: {
       snapshot: S(P.snapshot).length,
@@ -921,6 +960,8 @@ export default async function handler(req, res) {
       domKey: domSecond.domKey,
       secondKey: domSecond.secondKey,
       templateKey: domSecond.templateKey,
+      domLabel: codeToLabel(domSecond.domKey),
+      secondLabel: codeToLabel(domSecond.secondKey),
       comboIsValid,
       selectedTemplate,
       fallbackTemplate,
@@ -1004,7 +1045,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p6, L.p6Distribution.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V14.0] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V15.0] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -1064,7 +1105,7 @@ export default async function handler(req, res) {
     res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
     res.status(200).send(Buffer.from(outBytes));
   } catch (err) {
-    console.error("[fill-template:V14.0] CRASH", err);
+    console.error("[fill-template:V15.0] CRASH", err);
     res.status(500).json({
       ok: false,
       error: err?.message || String(err),
