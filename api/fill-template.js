@@ -1242,7 +1242,7 @@ export default async function handler(req, res) {
       pdfBytes: Buffer.from(outBytes),
       payloadJson: payload,
       summaryJson: payload?.ctrl?.summary || {},
-      resultsJson: payload?.ctrl?.summary || null
+      resultsJson: payload?.ctrl?.summary?.results || null
     });
 
     return res.status(200).json({
