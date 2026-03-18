@@ -1,54 +1,21 @@
 /**
- * CTRL PoC Export Service · fill-template (V15.0 · aligned to V16 build payload)
+ * CTRL PoC Export Service · fill-template (V17.0 · Lovable ingest handoff)
  *
- * Changes in this update:
- * - Fully aligned to the V16 Build PDF payload contract
- * - Treats direct paragraph fields as primary:
- *   - text.snapshot_p1..p4
- *   - text.chart_p1..p5
- *   - text.move_p1..p5
- *   - text.themes_p1..p2
- *   - text.interact_c / interact_t / interact_r / interact_l
- *   - text.act_1 / act_2 / act_3
- * - Uses rebuilt compatibility fields when present:
- *   - text.snapshot
- *   - text.chart_overview
- *   - text.awareness_movement
- *   - text.themes
- *   - text.interactions_with_others
- *   - text.actions
- *   - text.actions_bullets
- * - Supports V16 identity / date structure:
- *   - identity.fullName / preferredName / email / dateLabel
- *   - root dateLbl
- *   - root dateLabel
- * - Supports V16 ctrl structure:
- *   - ctrl.dominantKey / secondKey / dominantSubState / templateKey / bands / summary
- * - Supports V16 chart structure:
- *   - chart.spiderUrl
- *   - root spiderChartUrl
- * - Validates parent-vs-slot consistency in debug probe
- * - Validates actions array / act slots / bullets consistency in debug probe
- * - Adds raw-payload-style readiness checks in debug probe
- * - POST remains the primary transport
- * - Accepts both raw JSON payloads and wrapped bodies like { data: payload }
- * - GET ?data=... fallback retained only for backwards compatibility
- * - Keeps the 16-page user template structure:
- *   1  Cover
- *   2  Table of Contents
- *   3  How to Read This Profile
- *   4–5  Snapshot
- *   6–8  Distribution
- *   9–11 Movement
- *   12 Theme Overview
- *   13–14 Interaction with Others
- *   15 Actions
- *   16 Legal
- * - Correct template selection based on dominant + second key:
- *   e.g. RL -> CTRL_PoC_Assessment_Profile_template_RL.pdf
- * - True PDF fallback support:
- *   CTRL_PoC_Assessment_Profile_fallback.pdf
- * - Retains debug mode (?debug=1)
+ * Purpose:
+ * - Accept the existing V16/V17 Build PDF payload contract from Botpress
+ * - Generate the filled PDF
+ * - Send the generated PDF + metadata to Lovable edge function ingest-assessment
+ * - Return a JSON response with:
+ *   - ok
+ *   - assessmentUUID
+ *   - pdfUrl
+ *   - storagePath
+ *   - pdfFilename
+ *   - templateKey
+ * - Keep debug mode (?debug=1)
+ * - Keep optional direct PDF download mode (?download=1) for manual testing
+ * - Keep POST as the primary transport
+ * - Keep GET ?data=... only as backwards-compatible fallback
  */
 
 export const config = { runtime: "nodejs" };
@@ -188,14 +155,15 @@ function parseDateLabelToYYYYMMDD(dateLbl) {
   return clampStrForFilename(s || "date");
 }
 
-function makeOutputFilename(fullName, dateLbl) {
+function makeOutputFilename(fullName, dateLbl, assessmentUUID = "") {
   const parts = S(fullName).trim().split(/\s+/).filter(Boolean);
   const first = parts[0] || "First";
   const last = parts.length > 1 ? parts[parts.length - 1] : "Surname";
   const datePart = parseDateLabelToYYYYMMDD(dateLbl);
   const fn = clampStrForFilename(first);
   const ln = clampStrForFilename(last);
-  return `PoC_Profile_${fn}_${ln}_${datePart}.pdf`;
+  const aid = clampStrForFilename(assessmentUUID || "assessment");
+  return `PoC_Profile_${fn}_${ln}_${datePart}_${aid}.pdf`;
 }
 
 /* ───────── text wrapping + drawing ───────── */
@@ -521,7 +489,7 @@ async function embedRadarFromBandsOrUrl(pdfDoc, page, box, bandsRaw, chartUrl) {
   });
 }
 
-/* ───────── DEFAULT LAYOUT (16-page mapping) ───────── */
+/* ───────── DEFAULT LAYOUT (your current mapping preserved) ───────── */
 const DEFAULT_LAYOUT = {
   pages: {
     p1: {
@@ -663,8 +631,9 @@ function ensureActions(text) {
   };
 }
 
-/* ───────── input normaliser (aligned to V16 payload contract) ───────── */
+/* ───────── input normaliser ───────── */
 function normaliseInput(d = {}) {
+  const meta = okObj(d.meta) ? d.meta : {};
   const identity = okObj(d.identity) ? d.identity : {};
   const text = okObj(d.text) ? d.text : {};
   const ctrl = okObj(d.ctrl) ? d.ctrl : {};
@@ -709,6 +678,37 @@ function normaliseInput(d = {}) {
     ""
   ).trim();
 
+  const assessmentUUID = S(
+    meta.assessmentUUID ||
+    identity.assessmentUUID ||
+    ctrl.assessmentUUID ||
+    summary?.assessmentUUID ||
+    summary?.meta?.assessmentUUID ||
+    d.assessmentUUID ||
+    ""
+  ).trim();
+
+  const clientUUID = S(
+    meta.clientUUID ||
+    identity.clientUUID ||
+    d.clientUUID ||
+    ""
+  ).trim();
+
+  const coachUUID = S(
+    meta.coachUUID ||
+    identity.coachUUID ||
+    d.coachUUID ||
+    ""
+  ).trim();
+
+  const observerUUID = S(
+    meta.observerUUID ||
+    identity.observerUUID ||
+    d.observerUUID ||
+    ""
+  ).trim();
+
   const bandsRaw =
     (okObj(ctrl.bands) && Object.keys(ctrl.bands).length ? ctrl.bands : null) ||
     (okObj(summary.ctrl12) && Object.keys(summary.ctrl12).length ? summary.ctrl12 : null) ||
@@ -729,8 +729,15 @@ function normaliseInput(d = {}) {
 
   const ensuredActions = ensureActions(text);
 
-  const out = {
+  return {
     raw: d,
+
+    meta: {
+      assessmentUUID,
+      clientUUID,
+      coachUUID,
+      observerUUID
+    },
 
     identity: {
       fullName,
@@ -792,12 +799,97 @@ function normaliseInput(d = {}) {
 
     chartUrl: S(chart.spiderUrl || chart.url || d.spiderChartUrl || d.spider_chart_url || "").trim()
   };
+}
 
-  return out;
+/* ───────── ingest helpers ───────── */
+function getIngestConfig() {
+  const INGEST_ENDPOINT = clean(process.env.INGEST_ENDPOINT);
+  const INGEST_SECRET = clean(process.env.INGEST_SECRET);
+
+  return {
+    INGEST_ENDPOINT,
+    INGEST_SECRET
+  };
+}
+
+async function sendPdfToLovableIngest({
+  ingestCfg,
+  assessmentUUID,
+  clientUUID,
+  coachUUID,
+  observerUUID,
+  fullName,
+  email,
+  dominantKey,
+  secondKey,
+  templateKey,
+  pdfFilename,
+  pdfBytes,
+  payloadJson,
+  summaryJson,
+  resultsJson
+}) {
+  if (!ingestCfg.INGEST_ENDPOINT) {
+    throw new Error("Missing INGEST_ENDPOINT environment variable");
+  }
+  if (!ingestCfg.INGEST_SECRET) {
+    throw new Error("Missing INGEST_SECRET environment variable");
+  }
+  if (!assessmentUUID) {
+    throw new Error("assessmentUUID missing before ingest handoff");
+  }
+
+  const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
+
+  const body = {
+    assessmentUUID,
+    clientUUID: clientUUID || null,
+    coachUUID: coachUUID || null,
+    observerUUID: observerUUID || null,
+    fullName,
+    email,
+    dominantKey: dominantKey || null,
+    secondKey: secondKey || null,
+    templateKey: templateKey || null,
+    pdfFilename,
+    pdfBase64,
+    payloadJson: safeJson(payloadJson || {}),
+    summaryJson: safeJson(summaryJson || {}),
+    resultsJson: resultsJson == null ? null : safeJson(resultsJson)
+  };
+
+  const resp = await fetch(ingestCfg.INGEST_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-ingest-secret": ingestCfg.INGEST_SECRET
+    },
+    body: JSON.stringify(body)
+  });
+
+  const text = await resp.text();
+  let json = null;
+
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+
+  if (!resp.ok) {
+    const detail = json?.error || text || `HTTP ${resp.status}`;
+    throw new Error(`Lovable ingest failed (${resp.status}): ${detail}`);
+  }
+
+  if (!json?.ok) {
+    throw new Error(`Lovable ingest returned non-ok response: ${json?.error || "Unknown error"}`);
+  }
+
+  return json;
 }
 
 /* ───────── debug probe ───────── */
-function buildProbe(P, domSecond, templateInfo, ov, L) {
+function buildProbe(P, domSecond, templateInfo, ov, L, ingestCfg) {
   const expectedSnapshot = joinParas([P.snapshot_p1, P.snapshot_p2, P.snapshot_p3, P.snapshot_p4]);
   const expectedChart = joinParas([P.chart_p1, P.chart_p2, P.chart_p3, P.chart_p4, P.chart_p5]);
   const expectedMovement = joinParas([P.move_p1, P.move_p2, P.move_p3, P.move_p4, P.move_p5]);
@@ -815,13 +907,23 @@ function buildProbe(P, domSecond, templateInfo, ov, L) {
     looksEmail(P.identity.email) &&
     !!clean(P.identity.dateLabel) &&
     !!clean(domSecond.domKey) &&
-    !!clean(domSecond.secondKey);
+    !!clean(domSecond.secondKey) &&
+    !!clean(P.meta.assessmentUUID);
+
+  const outName = makeOutputFilename(P.identity.fullName, P.identity.dateLabel, P.meta.assessmentUUID);
 
   return {
     ok: true,
-    where: "fill-template:V15.0:debug",
+    where: "fill-template:V17.0:debug",
     templateSelection: safeJson(templateInfo),
     domSecond: safeJson(domSecond),
+
+    ids: {
+      assessmentUUID: P.meta.assessmentUUID,
+      clientUUID: P.meta.clientUUID,
+      coachUUID: P.meta.coachUUID,
+      observerUUID: P.meta.observerUUID
+    },
 
     identity: {
       fullName: P.identity.fullName,
@@ -832,6 +934,13 @@ function buildProbe(P, domSecond, templateInfo, ov, L) {
     },
 
     rawPayloadReady,
+
+    ingest: {
+      endpoint: ingestCfg.INGEST_ENDPOINT,
+      hasIngestEndpoint: !!ingestCfg.INGEST_ENDPOINT,
+      hasIngestSecret: !!ingestCfg.INGEST_SECRET,
+      computedPdfFilename: outName
+    },
 
     parentLengths: {
       snapshot: S(P.snapshot).length,
@@ -917,7 +1026,9 @@ export default async function handler(req, res) {
   try {
     const url = new URL(req.url, "http://localhost");
     const debug = url.searchParams.get("debug") === "1";
+    const download = url.searchParams.get("download") === "1";
     const method = String(req.method || "GET").toUpperCase();
+    const ingestCfg = getIngestConfig();
 
     if (!["GET", "POST"].includes(method)) {
       res.setHeader("Allow", "GET, POST");
@@ -975,7 +1086,15 @@ export default async function handler(req, res) {
     const ov = applyLayoutOverridesFromUrl(L, url);
 
     if (debug) {
-      return res.status(200).json(buildProbe(P, domSecond, templateInfo, ov, L));
+      return res.status(200).json(buildProbe(P, domSecond, templateInfo, ov, L, ingestCfg));
+    }
+
+    if (!P.meta.assessmentUUID) {
+      return res.status(400).json({
+        ok: false,
+        where: "fill-template:V17.0",
+        error: "assessmentUUID missing"
+      });
     }
 
     let templateBytes;
@@ -1045,7 +1164,7 @@ export default async function handler(req, res) {
       try {
         await embedRadarFromBandsOrUrl(pdfDoc, p6, L.p6Distribution.chart, P.bands || {}, P.chartUrl);
       } catch (e) {
-        console.warn("[fill-template:V15.0] Chart skipped:", e?.message || String(e));
+        console.warn("[fill-template:V17.0] Chart skipped:", e?.message || String(e));
       }
     }
 
@@ -1098,16 +1217,52 @@ export default async function handler(req, res) {
     }
 
     const outBytes = await pdfDoc.save();
-    const outName = makeOutputFilename(P.identity.fullName, P.identity.dateLabel);
+    const outName = makeOutputFilename(P.identity.fullName, P.identity.dateLabel, P.meta.assessmentUUID);
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
-    res.status(200).send(Buffer.from(outBytes));
+    // Optional direct binary mode for manual testing only
+    if (download) {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Disposition", `inline; filename="${outName}"`);
+      return res.status(200).send(Buffer.from(outBytes));
+    }
+
+    const ingestResponse = await sendPdfToLovableIngest({
+      ingestCfg,
+      assessmentUUID: P.meta.assessmentUUID,
+      clientUUID: P.meta.clientUUID,
+      coachUUID: P.meta.coachUUID,
+      observerUUID: P.meta.observerUUID,
+      fullName: P.identity.fullName,
+      email: P.identity.email,
+      dominantKey: domSecond.domKey,
+      secondKey: domSecond.secondKey,
+      templateKey: domSecond.templateKey,
+      pdfFilename: outName,
+      pdfBytes: Buffer.from(outBytes),
+      payloadJson: payload,
+      summaryJson: payload?.ctrl?.summary || {},
+      resultsJson: payload?.ctrl?.summary || null
+    });
+
+    return res.status(200).json({
+      ok: true,
+      where: "fill-template:V17.0",
+      assessmentUUID: ingestResponse.assessmentUUID || P.meta.assessmentUUID,
+      pdfUrl: ingestResponse.pdfUrl || "",
+      storagePath: ingestResponse.storagePath || "",
+      pdfFilename: ingestResponse.pdfFilename || outName,
+      templateKey: domSecond.templateKey,
+      dominantKey: domSecond.domKey,
+      secondKey: domSecond.secondKey,
+      usedTemplate: templateInfo.usedTemplate,
+      usedFallbackTemplate: templateInfo.usedFallback
+    });
   } catch (err) {
-    console.error("[fill-template:V15.0] CRASH", err);
-    res.status(500).json({
+    console.error("[fill-template:V17.0] CRASH", err);
+    return res.status(500).json({
       ok: false,
+      where: "fill-template:V17.0",
       error: err?.message || String(err),
       stack: err?.stack || null,
     });
