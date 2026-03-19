@@ -2,7 +2,7 @@
  * CTRL PoC Export Service · fill-template (V17.0 · Lovable ingest handoff)
  *
  * Purpose:
- * - Accept the existing V16/V17 Build PDF payload contract from Botpress
+ * - Accept the existing V17 Build PDF payload contract from Botpress
  * - Generate the filled PDF
  * - Send the generated PDF + metadata to Lovable edge function ingest-assessment
  * - Return a JSON response with:
